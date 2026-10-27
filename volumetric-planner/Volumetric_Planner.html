@@ -225,6 +225,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="kpi"><div class="l">Next Loc from route mapping</div><div class="v" id="lhHit">0</div></div>
       <div class="kpi" id="lhFallBox"><div class="l">Fallback to Shipment_Destination_dc</div><div class="v" id="lhFall">0</div></div>
       <div class="kpi"><div class="l">Distinct Next Loc</div><div class="v" id="lhNextN">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="lhVol">0</div></div>
     </div>
     <section class="panel">
       <div class="sectionhead">
@@ -237,6 +238,21 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="muted" id="lhNote" style="font-size:13px;margin-bottom:8px"></div>
       <div class="tablewrap" style="max-height:360px">
         <table><thead><tr><th>Next Loc</th><th class="num">Count of Awb_number</th><th class="num">From route mapping</th><th class="num">Fallback</th></tr></thead><tbody id="lhSumBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">LH Intransit volumetric by lane</h2>
+        <div class="row"><button class="btn" id="lhLaneExport">Download lane summary</button></div>
+      </div>
+      <div class="muted" id="lhLaneNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Lane Code</th><th>Destinations included</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="lhLaneBody"></tbody></table>
+      </div>
+      <h3 class="sub">Not eligible for planning <span class="muted" id="lhNECount" style="font-weight:400"></span></h3>
+      <p class="hint">Next Loc with no lane in the transportation master (or outside the selected hub's lanes). Not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:240px">
+        <table><thead><tr><th>Next Loc</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="lhNEBody"></tbody></table>
       </div>
     </section>
     <section class="panel">
@@ -920,6 +936,12 @@ function computeLH(){
     else { next[i]=dest; src[i]=dest?'fallback':''; if(dest) fall++; }
   }
   L.od=od; L.next=next; L.src=src;
+  const ciL=findCol(L.headers,'Client');
+  L.coef=new Array(L.rows.length); L.res=new Array(L.rows.length);
+  for(let i=0;i<L.rows.length;i++){
+    L.coef[i]=coeffFor(ciL>=0?L.rows[i][ciL]:'');
+    L.res[i]=resolveLane(next[i], hub);
+  }
   $('lhResults').classList.remove('hidden');
   $('lhRows').textContent=fmt(L.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
   $('lhFallBox').classList.toggle('warn',fall>0);
@@ -928,7 +950,7 @@ function computeLH(){
   else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses Shipment_Destination_dc.';
   else note='OD Pair = '+hub+'-Shipment_Destination_dc. Next Loc comes from the route mapping where the OD Pair matches, otherwise Shipment_Destination_dc.';
   $('lhNote').textContent=note;
-  renderLHSummary(); renderLHPreview();
+  renderLHSummary(); renderLHLanes(); renderLHPreview();
 }
 function renderLHSummary(){
   const L=state.lh, g=new Map();
@@ -939,22 +961,57 @@ function renderLHSummary(){
   $('lhSumBody').innerHTML=list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="num"><b>'+fmt(e.n,0)+'</b></td><td class="num">'+fmt(e.r,0)+'</td><td class="num">'+fmt(e.f,0)+'</td></tr>').join('')
     + '<tr><td><b>'+(q?'Filtered total':'Grand total')+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].r,0),0)+'</td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].f,0),0)+'</td></tr>';
 }
+function renderLHLanes(){
+  const L=state.lh, lanes=new Map(), ne=new Map(); let eligVol=0, neN=0, neV=0;
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], v=L.coef[i].c, nl=L.next[i]||'(blank)';
+    if(rs.status==='ne'){ neN++; if(v!=null) neV+=v; const e=ne.get(normTM(nl))||{name:nl,n:0,vol:0}; e.n++; if(v!=null) e.vol+=v; ne.set(normTM(nl),e); continue; }
+    const lane = rs.status==='hub' ? rs.lane : rs.lane;
+    const e=lanes.get(lane)||{n:0,vol:0,dests:new Map()}; e.n++; if(v!=null){ e.vol+=v; eligVol+=v; }
+    if(!e.dests.has(normTM(nl))) e.dests.set(normTM(nl), disp(nl)); lanes.set(lane,e);
+  }
+  const hasLanes=state.tm.size>0;
+  $('lhVol').textContent=fmt(eligVol);
+  const list=[...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol);
+  $('lhLaneBody').innerHTML = list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="wrapcell">'+esc([...e.dests.values()].sort().join(', '))+'</td><td class="num">'+fmt(e.n,0)+'</td><td class="num"><b>'+fmt(e.vol)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num"><b>'+fmt(eligVol)+'</b></td></tr>';
+  const neL=[...ne.values()].sort((a,b)=>b.n-a.n);
+  $('lhNEBody').innerHTML = neL.length ? neL.map(x=>'<tr><td>'+esc(disp(x.name))+'</td><td class="num">'+fmt(x.n,0)+'</td><td class="num">'+fmt(x.vol)+'</td></tr>').join('') : '<tr><td colspan="3" class="muted">None.</td></tr>';
+  $('lhNECount').textContent='· '+fmt(neN,0)+' rows · volumetric '+fmt(neV);
+  $('lhLaneNote').textContent = (hasLanes ? '' : 'Upload the transportation master to see lanes. ')
+    + 'Each row adds its Client coefficient (same rules as Floor pendency) to the lane of its Next Loc'+(state.planOrigin?' for the selected hub.':'.');
+}
 function renderLHPreview(){
   const L=state.lh; const want=['Awb_number','Client','MM_destination','Shipment_Destination_dc','Delivery_hub'];
   const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
   const N=Math.min(200,L.rows.length);
-  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+2)+' columns';
-  $('lhPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th></tr>';
+  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+6)+' columns';
+  $('lhPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th><th class="num">volumetric_coeff</th><th>Lane Code</th></tr>';
   let html='';
-  for(let r=0;r<N;r++) html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td></tr>';
+  for(let r=0;r<N;r++){
+    const rs=L.res[r], c=L.coef[r];
+    html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td>'
+      +'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ne'?'<span class="tag miss">not eligible</span>':esc(rs.lane))+'</td></tr>';
+  }
   $('lhPrevBody').innerHTML=html;
 }
 $('lhSearch').oninput=()=>{ if(state.lh&&state.lh.next) renderLHSummary(); };
 $('lhExport').onclick=()=>{
   const L=state.lh; if(!L) return;
-  const lines=[L.headers.concat(['OD Pair','Next Loc']).map(csvCell).join(',')];
-  for(let i=0;i<L.rows.length;i++) lines.push(L.rows[i].concat([L.od[i],L.next[i]]).map(csvCell).join(','));
-  download(L.name.replace(/\.[^.]+$/,'')+'_with_next_loc_'+stamp()+'.csv',lines);
+  const lines=[L.headers.concat(['OD Pair','Next Loc','volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], c=L.coef[i];
+    lines.push(L.rows[i].concat([L.od[i],L.next[i],c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+  }
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+};
+$('lhLaneExport').onclick=()=>{
+  const L=state.lh; if(!L) return;
+  const lanes=new Map();
+  for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.next[i])); lanes.set(rs.lane,e); }
+  const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
+  download('lh_intransit_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('lhDrop','lhFile',handleLHFile);
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; }catch(e){}
