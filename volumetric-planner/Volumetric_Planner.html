@@ -93,7 +93,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <h1>Volumetric Planner</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
-    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
+    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
   </header>
 
   <section class="panel hidden" id="tmPanel">
@@ -118,6 +118,18 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <input type="file" id="hmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
     <div class="fileinfo" id="hmInfo"></div>
     <div class="err" id="hmErr"></div>
+  </section>
+
+  <section class="panel hidden" id="rmPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Route mapping sheet</h2>
+      <button class="btn" id="rmClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>OD Pair</b>, <b>origin_dc</b>, <b>Via1–Via6</b>, <b>destination_dc</b> and <b>Next Location</b>. Large files are kept in this browser's database. Upload again to replace it.</p>
+    <button class="drop" id="rmDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="rmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="rmInfo"></div>
+    <div class="err" id="rmErr"></div>
   </section>
 
   <div class="grid2">
@@ -229,7 +241,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -484,6 +496,11 @@ function recompute(){
     groups.set(gk,g);
   }
   state.computed={per,groups,total,neMap,ambMap,neN,laneMode};
+  if(state.rm.size && state.locIdx>=0 && state.nlIdx>=0){
+    let hit=0, tot=0; const seen=new Set();
+    rows.forEach(rw=>{ const k=normTM(rw[state.locIdx])+'|'+normTM(rw[state.nlIdx]); if(seen.has(k)) return; seen.add(k); tot++; if(state.rm.has(k)) hit++; });
+    $('rmInfo').innerHTML='<b>'+esc(state.rmName)+'</b> · '+fmt(hit,0)+' of '+fmt(tot,0)+' location → next_location pairs found in the route mapping';
+  }
   if(state.hm.size && laneMode) $('hmInfo').innerHTML='<b>'+esc(state.hmName)+'</b> · '+fmt(hmHit.size,0)+' of '+fmt(nlSeen.size,0)+' next_location values found in the hub mapping';
   $('kRows').textContent=fmt(rows.length,0);
   $('kVol').textContent=fmt(total);
@@ -772,6 +789,45 @@ $('hmBtn').onclick=()=>$('hmPanel').classList.toggle('hidden');
 $('hmClose').onclick=()=>$('hmPanel').classList.add('hidden');
 wireDrop('hmDrop','hmFile',handleHMFile);
 loadHM();
+/* ---------- route mapping sheet (IndexedDB: too big for localStorage) ---------- */
+function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('volumetricPlanner',1); r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function kvSet(key,val){ const db=await idb(); return new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(val,key); t.oncomplete=()=>{db.close();res();}; t.onerror=()=>{db.close();rej(t.error);}; }); }
+async function kvGet(key){ const db=await idb(); return new Promise((res,rej)=>{ const q=db.transaction('kv').objectStore('kv').get(key); q.onsuccess=()=>{db.close();res(q.result);}; q.onerror=()=>{db.close();rej(q.error);}; }); }
+function showRMInfo(){
+  $('rmInfo').innerHTML = state.rm.size ? '<b>'+esc(state.rmName)+'</b> · '+fmt(state.rm.size,0)+' OD pairs loaded' : '';
+  $('rmBtn').textContent = 'Route mapping sheet' + (state.rm.size ? ' ✓' : '');
+}
+(async()=>{
+  try{ const o=await kvGet('route'); if(o){ state.rm=new Map(o.list||[]); state.rmName=o.name||''; showRMInfo(); if(state.data) recompute(); } }catch(e){}
+  showRMInfo();
+})();
+async function handleRMFile(file){
+  $('rmErr').textContent=''; $('rmInfo').textContent='Reading '+file.name+' (large files take a moment)…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const need={od:h.indexOf('od pair'),origin:h.indexOf('origin_dc'),dest:h.indexOf('destination_dc'),next:h.indexOf('next location')};
+    const miss=Object.keys(need).filter(k=>need[k]<0);
+    if(miss.length) throw new Error('This does not look like a route mapping: missing column'+(miss.length>1?'s ':' ')+miss.map(x=>({od:'"OD Pair"',origin:'"origin_dc"',dest:'"destination_dc"',next:'"Next Location"'})[x]).join(', ')+'.');
+    const viaIdx=h.map((x,i)=>/^via\d+$/.test(x)?i:-1).filter(i=>i>=0);
+    const m=new Map();
+    rows.slice(1).forEach(r=>{
+      const o=String(r[need.origin]??'').trim(), d=String(r[need.dest]??'').trim();
+      if(!o||!d) return;
+      const vias=viaIdx.map(i=>String(r[i]??'').trim()).filter(Boolean);
+      const k=normTM(o)+'|'+normTM(d);
+      if(!m.has(k)) m.set(k,[String(r[need.next]??'').trim(), vias.join(' > '), o, d]);
+    });
+    if(!m.size) throw new Error('No origin and destination pairs found.');
+    state.rm=m; state.rmName=file.name;
+    await kvSet('route',{name:file.name,list:[...m.entries()]});
+    showRMInfo(); if(state.data) recompute();
+  }catch(e){ showRMInfo(); $('rmErr').textContent=e.message+(state.rm.size?' Your previously saved mapping is still in use.':''); }
+}
+$('rmBtn').onclick=()=>$('rmPanel').classList.toggle('hidden');
+$('rmClose').onclick=()=>$('rmPanel').classList.add('hidden');
+wireDrop('rmDrop','rmFile',handleRMFile);
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
