@@ -93,7 +93,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <h1>Volumetric Planner</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
-    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="vcBtn">Vehicle capacity</button><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
+    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><button class="btn" id="vcBtn">Vehicle capacity sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
   </header>
 
   <section class="panel hidden" id="tmPanel">
@@ -854,7 +854,7 @@ function saveVC(){
 }
 function showVCInfo(){
   $('vcInfo').innerHTML = state.vc.size ? '<b>'+esc(state.vcName)+'</b> · '+fmt(state.vc.size,0)+' fleet types loaded' : '';
-  $('vcBtn').textContent = 'Vehicle capacity' + (state.vc.size ? ' ✓' : '');
+  $('vcBtn').textContent = 'Vehicle capacity sheet' + (state.vc.size ? ' ✓' : '');
 }
 try{ const raw=localStorage.getItem(VC_KEY); if(raw){ const o=JSON.parse(raw); state.vc=new Map(o.list||[]); state.vcName=o.name||''; } }catch(e){}
 showVCInfo();
