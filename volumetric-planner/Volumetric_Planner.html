@@ -93,7 +93,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <h1>Volumetric Planner</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
-    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><button class="btn" id="vcBtn">Vehicle capacity sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
+    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="ccBtn">Client coefficients sheet</button><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><button class="btn" id="vcBtn">Vehicle capacity sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
   </header>
 
   <section class="panel hidden" id="tmPanel">
@@ -108,16 +108,17 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <div class="err" id="tmErr"></div>
   </section>
 
-  <section class="panel hidden" id="hmPanel">
+  <section class="panel hidden" id="ccPanel">
     <div class="sectionhead">
-      <h2 style="margin:0">Hub mapping sheet</h2>
-      <button class="btn" id="hmClose">Close</button>
+      <h2 style="margin:0">Client coefficients sheet</h2>
+      <button class="btn" id="ccClose">Close</button>
     </div>
-    <p class="hint">Upload once (CSV or Excel). Uses <b>hub_name</b>, <b>DC_name</b>, <b>dc_identifier</b>, <b>dc_city</b> and <b>Zone</b>. Saved on this computer; upload again to replace it.</p>
-    <button class="drop" id="hmDrop" type="button"><strong>Choose file</strong> or drop it here</button>
-    <input type="file" id="hmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
-    <div class="fileinfo" id="hmInfo"></div>
-    <div class="err" id="hmErr"></div>
+    <p class="hint">Upload once (CSV or Excel with <b>Client</b> and <b>Coefficient</b> columns). Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="coeffDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="coeffFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="coeffInfo"></div>
+    <div class="err" id="coeffErr"></div>
+    <button class="btn" id="openCoeff" style="margin-top:10px">View coefficient table <span id="coeffBtnCount" class="muted"></span> →</button>
   </section>
 
   <section class="panel hidden" id="rmPanel">
@@ -146,33 +147,24 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 
   <div class="grid2">
     <section class="panel">
-      <h2><span class="step">1</span> Client coefficients</h2>
-      <p class="hint">Upload once (CSV or Excel with <b>Client</b> and <b>Coefficient</b> columns). It's remembered on this computer for next time.</p>
-      <button class="drop" id="coeffDrop" type="button"><strong>Choose file</strong> or drop it here</button>
-      <input type="file" id="coeffFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
-      <div class="fileinfo" id="coeffInfo"></div>
-      <div class="err" id="coeffErr"></div>
-      <button class="btn" id="openCoeff" style="margin-top:10px">View coefficient table <span id="coeffBtnCount" class="muted"></span> →</button>
-    </section>
-    <section class="panel">
-      <h2><span class="step">2</span> Floor pendency</h2>
+      <h2><span class="step">1</span> Floor pendency</h2>
       <p class="hint">Upload the shipment export (CSV or Excel). The <b>client_name</b> column is matched to your client coefficients.</p>
       <button class="drop" id="dataDrop" type="button"><strong>Choose file</strong> or drop it here</button>
       <input type="file" id="dataFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
       <div class="fileinfo" id="dataInfo"></div>
       <div class="err" id="dataErr"></div>
     </section>
+    <section class="panel">
+      <h2><span class="step">2</span> LH Intransit</h2>
+      <p class="hint">Upload the LH Intransit export (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + <b>Shipment_Destination_dc</b>) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise Shipment_Destination_dc). Existing columns are kept as they are.</p>
+      <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+      <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+      <div class="fileinfo" id="lhInfo"></div>
+      <div class="err" id="lhErr"></div>
+    </section>
   </div>
 
 
-  <section class="panel">
-    <h2><span class="step">3</span> LH Intransit</h2>
-    <p class="hint">Upload the LH Intransit export (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + <b>Shipment_Destination_dc</b>) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise Shipment_Destination_dc). Existing columns are kept as they are.</p>
-    <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
-    <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
-    <div class="fileinfo" id="lhInfo"></div>
-    <div class="err" id="lhErr"></div>
-  </section>
 
   <section class="panel hidden" id="laneView">
     <div class="sectionhead">
@@ -317,7 +309,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -565,7 +557,7 @@ function recompute(){
   const laneMode=state.groupIdx===-1;
   const {rows}=state.data, ci=state.clientIdx, gi=state.groupIdx;
   const per=new Array(rows.length); const groups=new Map(); const missing=new Map(); const matchedClients=new Set();
-  const neMap=new Map(), ambMap=new Map(); const hmHit=new Set(), nlSeen=new Set();
+  const neMap=new Map(), ambMap=new Map();
   let total=0, missRows=0, neN=0;
   for(let i=0;i<rows.length;i++){
     const client=rows[i][ci]; const r=coeffFor(client); per[i]=r;
@@ -574,7 +566,6 @@ function recompute(){
     let gk, nlName='', nlKey='';
     if(laneMode){
       const nl=rows[i][state.nlIdx]; nlName=String(nl??'').trim()||'(blank)'; nlKey=normTM(nl)||'(blank)';
-      if(state.hm.size){ nlSeen.add(nlKey); if(state.hm.has(normTM(nl))) hmHit.add(nlKey); }
       const res=resolveLane(nl, state.locIdx>=0?rows[i][state.locIdx]:'');
       if(res.status==='ne'){
         neN++; const m=neMap.get(nlKey)||{name:nlName,n:0,vol:0}; m.n++; if(r.c!=null) m.vol+=r.c; neMap.set(nlKey,m);
@@ -595,7 +586,6 @@ function recompute(){
     rows.forEach(rw=>{ const k=normTM(rw[state.locIdx])+'|'+normTM(rw[state.nlIdx]); if(seen.has(k)) return; seen.add(k); tot++; if(state.rm.has(k)) hit++; });
     $('rmInfo').innerHTML='<b>'+esc(state.rmName)+'</b> · '+fmt(hit,0)+' of '+fmt(tot,0)+' location → next_location pairs found in the route mapping';
   }
-  if(state.hm.size && laneMode) $('hmInfo').innerHTML='<b>'+esc(state.hmName)+'</b> · '+fmt(hmHit.size,0)+' of '+fmt(nlSeen.size,0)+' next_location values found in the hub mapping';
   $('kRows').textContent=fmt(rows.length,0);
   $('kVol').textContent=fmt(total);
   $('kClients').textContent=fmt(matchedClients.size,0);
@@ -698,6 +688,7 @@ function renderCoeffs(){
   const list=[...state.coeffs.entries()].sort((a,b)=>a[1].name.localeCompare(b[1].name));
   $('coeffCount').textContent='· '+list.length+' clients';
   $('coeffBtnCount').textContent='('+list.length+')';
+  $('ccBtn').textContent='Client coefficients sheet'+(list.length?' ✓':'');
   $('coeffBody').innerHTML = list.length ? list.map(([k,v])=>
     '<tr><td>'+esc(v.name)+'</td><td class="num"><input type="number" step="any" value="'+esc(v.coeff)+'" data-k="'+esc(k)+'"></td>'+
     '<td><button class="link" data-del="'+esc(k)+'">Remove</button></td></tr>').join('')
@@ -879,50 +870,12 @@ async function handleVCFile(file){
     if(bad) $('vcInfo').innerHTML+=' <span class="muted">· '+fmt(bad,0)+' rows skipped (capacity not a number)</span>';
   }catch(e){ showVCInfo(); $('vcErr').textContent=e.message+(state.vc.size?' Your previously saved table is still in use.':''); }
 }
+$('ccBtn').onclick=()=>{ const p=$('ccPanel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth',block:'start'}); };
+$('ccClose').onclick=()=>$('ccPanel').classList.add('hidden');
 $('vcBtn').onclick=()=>{ const p=$('vcPanel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth',block:'start'}); };
 $('vcClose').onclick=()=>$('vcPanel').classList.add('hidden');
 wireDrop('vcDrop','vcFile',handleVCFile);
 
-/* ---------- hub mapping sheet ---------- */
-const HM_KEY='volumetricPlanner.hm.v1';
-function saveHM(){
-  try{ localStorage.setItem(HM_KEY, JSON.stringify({name:state.hmName, list:[...state.hm.entries()]})); }
-  catch(e){ $('hmErr').textContent='Loaded, but this browser could not save the hub mapping for next time.'; }
-}
-function loadHM(){
-  try{ const raw=localStorage.getItem(HM_KEY); if(!raw) return; const o=JSON.parse(raw); state.hm=new Map(o.list||[]); state.hmName=o.name||''; }catch(e){}
-  showHMInfo();
-}
-function showHMInfo(){
-  $('hmInfo').innerHTML = state.hm.size ? '<b>'+esc(state.hmName)+'</b> · '+fmt(state.hm.size,0)+' hub and DC names loaded' : '';
-  $('hmBtn').textContent = 'Hub mapping sheet' + (state.hm.size ? ' ✓' : '');
-}
-async function handleHMFile(file){
-  $('hmErr').textContent=''; $('hmInfo').textContent='Reading '+file.name+'…';
-  try{
-    const rows=await readFile(file);
-    if(rows.length<2) throw new Error('No data rows found under the header.');
-    const h=rows[0].map(x=>String(x).trim().toLowerCase());
-    const need={hub_name:h.indexOf('hub_name'),DC_name:h.indexOf('dc_name'),dc_identifier:h.indexOf('dc_identifier'),dc_city:h.indexOf('dc_city'),Zone:h.indexOf('zone')};
-    const miss=Object.keys(need).filter(k=>need[k]<0);
-    if(miss.length) throw new Error('This does not look like a hub mapping: missing column'+(miss.length>1?'s ':' ')+miss.map(x=>'"'+x+'"').join(', ')+'.');
-    const m=new Map();
-    rows.slice(1).forEach(r=>{
-      const hub=String(r[need.hub_name]??'').trim(), dc=String(r[need.DC_name]??'').trim();
-      if(!hub && !dc) return;
-      const rec=[String(r[need.Zone]??'').trim(), dc, String(r[need.dc_identifier]??'').trim(), String(r[need.dc_city]??'').trim(), hub];
-      if(hub && !m.has(normTM(hub))) m.set(normTM(hub), rec);
-      if(dc && !m.has(normTM(dc))) m.set(normTM(dc), rec);
-    });
-    if(!m.size) throw new Error('No hub or DC names found.');
-    state.hm=m; state.hmName=file.name; saveHM(); showHMInfo();
-    if(state.data) recompute();
-  }catch(e){ showHMInfo(); $('hmErr').textContent=e.message+(state.hm.size?' Your previously saved mapping is still in use.':''); }
-}
-$('hmBtn').onclick=()=>$('hmPanel').classList.toggle('hidden');
-$('hmClose').onclick=()=>$('hmPanel').classList.add('hidden');
-wireDrop('hmDrop','hmFile',handleHMFile);
-loadHM();
 /* ---------- route mapping sheet (IndexedDB: too big for localStorage) ---------- */
 function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('volumetricPlanner',1); r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
 async function kvSet(key,val){ const db=await idb(); return new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(val,key); t.oncomplete=()=>{db.close();res();}; t.onerror=()=>{db.close();rej(t.error);}; }); }
@@ -1117,7 +1070,7 @@ $('lhLaneExport').onclick=()=>{
   download('lh_intransit_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('lhDrop','lhFile',handleLHFile);
-try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; }catch(e){}
+try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; localStorage.removeItem('volumetricPlanner.hm.v1'); }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
 </script>
