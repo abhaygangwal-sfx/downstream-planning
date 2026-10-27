@@ -132,6 +132,18 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <div class="err" id="rmErr"></div>
   </section>
 
+  <section class="panel hidden" id="vcPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Vehicle capacity sheet</h2>
+      <button class="btn" id="vcClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>Fleet Type</b> and <b>Capacity</b>. Fleet names are matched ignoring case, spaces and underscores. Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="vcDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="vcFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="vcInfo"></div>
+    <div class="err" id="vcErr"></div>
+  </section>
+
   <div class="grid2">
     <section class="panel">
       <h2><span class="step">1</span> Client coefficients</h2>
@@ -231,18 +243,6 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="tablewrap"><table><thead id="prevHead"></thead><tbody id="prevBody"></tbody></table></div>
     </section>
   </div>
-
-  <section class="panel hidden" id="vcPanel">
-    <div class="sectionhead">
-      <h2 style="margin:0">Vehicle capacity</h2>
-      <button class="btn" id="vcClose">Close</button>
-    </div>
-    <p class="hint">Upload once (CSV or Excel). Uses <b>Fleet Type</b> and <b>Capacity</b>. Fleet names are matched ignoring case, spaces and underscores. Saved on this computer; upload again to replace it.</p>
-    <button class="drop" id="vcDrop" type="button"><strong>Choose file</strong> or drop it here</button>
-    <input type="file" id="vcFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
-    <div class="fileinfo" id="vcInfo"></div>
-    <div class="err" id="vcErr"></div>
-  </section>
 
   <div id="lhResults" class="hidden">
     <div class="kpis">
@@ -879,7 +879,7 @@ async function handleVCFile(file){
     if(bad) $('vcInfo').innerHTML+=' <span class="muted">· '+fmt(bad,0)+' rows skipped (capacity not a number)</span>';
   }catch(e){ showVCInfo(); $('vcErr').textContent=e.message+(state.vc.size?' Your previously saved table is still in use.':''); }
 }
-$('vcBtn').onclick=()=>$('vcPanel').classList.toggle('hidden');
+$('vcBtn').onclick=()=>{ const p=$('vcPanel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth',block:'start'}); };
 $('vcClose').onclick=()=>$('vcPanel').classList.add('hidden');
 wireDrop('vcDrop','vcFile',handleVCFile);
 
