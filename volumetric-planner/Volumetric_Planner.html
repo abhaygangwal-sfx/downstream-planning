@@ -786,13 +786,13 @@ $('backMain').onclick=()=>showPage('main');
 const TM_KEY='volumetricPlanner.tm.v4', ORIGIN_KEY='volumetricPlanner.originHub';
 const HUBS='Guwahati DC|Kolkata DC|Lucknow DC|Bhubneshwar DC|Malda DC|Silchar DC|Dibrugarh DC|Patna DC|Purnia DC|Ranchi DC|Sambalpur DC|Siliguri DC|Kolkata 2 DC|Varanasi DC|Kanpur DC|Ludhiana DC|NCR Bilaspur DC|NCR Bamnoli DC|OneNCR DC|Jammu DC|NCR Tauru DC|Jaipur DC|Indore DC|Bhopal DC|Raipur DC|Sagar DC|Bangalore DC|Hyderabad DC|Chennai DC|Kochi DC|Kozhikode DC|Mysore DC|Vijayawada DC|Coimbatore DC|Hubli DC|Madurai DC|Trichy DC|Visakhapatnam DC|Bangalore XD DC|Nagpur DC|Mumbai DC|Pune DC|Aurangabad DC|Surat DC|Ahmedabad DC|Udaipur DC|Srinagar DC|Moradabad DC|Jodhpur DC|Rajahmundry DC|Gorakhpur DC|Chandigarh DC|Akola DC|Jabalpur DC|Kolkata XD DC|Hyderabad REV DC|OneSRT DC|OneAMD DC|OneRJT DC|TwoNCR DC'.split('|');
 function saveTM(){
-  try{ localStorage.setItem(TM_KEY, JSON.stringify({name:state.tmName, list:[...state.tm.entries()], origins:state.tmOrigins, fleet:[...state.tmFleet.entries()]})); }
+  try{ localStorage.setItem(TM_KEY, JSON.stringify({name:state.tmName, list:[...state.tm.entries()], origins:state.tmOrigins, fleet:[...state.tmFleet.entries()], fleetCol:state.tmFleetCol})); }
   catch(e){ $('tmErr').textContent='Loaded, but this browser could not save the master for next time (storage full or blocked). Upload it again after reopening.'; }
 }
 function loadTM(){
   try{
     const raw=localStorage.getItem(TM_KEY); if(!raw) return;
-    const o=JSON.parse(raw); state.tm=new Map(o.list||[]); state.tmName=o.name||''; state.tmOrigins=o.origins||[]; state.tmFleet=new Map(o.fleet||[]);
+    const o=JSON.parse(raw); state.tm=new Map(o.list||[]); state.tmName=o.name||''; state.tmOrigins=o.origins||[]; state.tmFleet=new Map(o.fleet||[]); state.tmFleetCol=o.fleetCol;
   }catch(e){}
   fillOrigins(); showTMInfo();
 }
@@ -803,7 +803,10 @@ function fillOrigins(){
 }
 function showTMInfo(){
   const lanes=new Set(); state.tm.forEach(e=>e.cands.forEach(c=>lanes.add(c.lane)));
-  $('tmInfo').innerHTML = state.tm.size ? '<b>'+esc(state.tmName)+'</b> · '+fmt(lanes.size,0)+' lanes · '+fmt(state.tmOrigins.length,0)+' origins · '+fmt(state.tm.size,0)+' destinations' : '';
+  $('tmInfo').innerHTML = state.tm.size ? '<b>'+esc(state.tmName)+'</b> · '+fmt(lanes.size,0)+' lanes · '+fmt(state.tmOrigins.length,0)+' origins · '+fmt(state.tm.size,0)+' destinations'
+    + (state.tmFleet.size ? ' · Fleet Type for '+fmt(state.tmFleet.size,0)+' lanes'
+       : state.tmFleetCol===false ? ' <span class="tag miss">no Fleet Type / Vehicle Type column in this file</span>'
+       : ' <span class="tag miss">Fleet Type not saved — upload this file again</span>') : '';
   $('tmBtn').textContent = 'Transportation master sheet' + (state.tm.size ? ' ✓' : '');
 }
 async function handleTMFile(file){
@@ -812,7 +815,7 @@ async function handleTMFile(file){
     const rows=await readFile(file);
     if(!rows.length) throw new Error('This file is empty.');
     const h=rows[0].map(x=>String(x).trim().toLowerCase());
-    const di=h.indexOf('destination'), li=h.indexOf('lane code'), loi=h.indexOf('lane origin'), fti=h.indexOf('fleet type');
+    const di=h.indexOf('destination'), li=h.indexOf('lane code'), loi=h.indexOf('lane origin'), fti=['fleet type','vehicle type','fleet','vehicle'].map(x=>h.indexOf(x)).find(i=>i>=0)??-1;
     const miss=[di<0?'"Destination"':'', li<0?'"Lane Code"':''].filter(Boolean);
     if(miss.length) throw new Error('This does not look like a transportation master: missing '+miss.join(' and ')+' column'+(miss.length>1?'s':'')+' in the first row.');
     if(rows.length<2) throw new Error('No data rows found under the header.');
@@ -826,10 +829,11 @@ async function handleTMFile(file){
       const k=normTM(dest); let e=m.get(k); if(!e){ e={dest,cands:[]}; m.set(k,e); }
       let c=e.cands.find(x=>x.lane===lane); if(!c){ c={lane,o,n:0,i:idx}; e.cands.push(c); }
       c.n++; used++;
-      if(fti>=0){ const ft=String(r[fti]??'').trim(); if(ft){ let f=fleets.get(lane); if(!f){ f=new Map(); fleets.set(lane,f); } f.set(ft,(f.get(ft)||0)+1); } }
+      if(fti>=0){ const ft=String(r[fti]??'').trim(); if(ft){ const lk=normTM(lane); let f=fleets.get(lk); if(!f){ f=new Map(); fleets.set(lk,f); } f.set(ft,(f.get(ft)||0)+1); } }
     });
     if(!m.size) throw new Error('No rows with both a Destination and a Lane Code were found.');
     state.tm=m; state.tmName=file.name;
+    state.tmFleetCol = fti>=0;
     /* one Fleet Type per lane: the most frequent; first listed on a tie */
     state.tmFleet=new Map([...fleets.entries()].map(([lane,f])=>{ let best='',bn=-1; f.forEach((n,ft)=>{ if(n>bn){best=ft;bn=n;} }); return [lane,{fleet:best,multi:f.size>1,all:[...f.keys()]}]; }));
     state.tmOrigins=[...origins.entries()].sort((a,b)=>a[1].localeCompare(b[1],undefined,{sensitivity:'base'}));
@@ -1027,7 +1031,7 @@ function laneTotals(){
 }
 /* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
 function laneCapacity(lane){
-  const f=state.tmFleet.get(lane);
+  const f=state.tmFleet.get(normTM(lane));
   if(!f || !f.fleet) return {fleet:'', capacity:null};
   const v=state.vc.get(normFleet(f.fleet));
   return {fleet:f.fleet, multi:f.multi, all:f.all, capacity: v ? v.capacity : null};
@@ -1040,7 +1044,7 @@ function renderLaneView(){
   $('laneBody').innerHTML = rows.map(x=>{
     const cap=laneCapacity(x.lane), total=x.f+x.h;
     let fleetCell, capCell, spillCell;
-    if(!cap.fleet){ fleetCell='<span class="tag miss">no fleet type</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
+    if(!cap.fleet){ fleetCell='<span class="tag miss">'+(state.tmFleet.size?'no fleet type':'re-upload master')+'</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
     else {
       fleetCell=esc(cap.fleet)+(cap.multi?' <span class="tag def" title="Lane has '+esc(cap.all.join(', '))+'">multiple</span>':'');
       if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
@@ -1051,7 +1055,7 @@ function renderLaneView(){
     + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf,0)+'</b></td><td class="num"><b>'+fmt(th,0)+'</b></td><td class="num"><b>'+fmt(tf+th,0)+'</b></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
     + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit. Spillover = Vol coeff − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
-    + (state.tm.size && !state.tmFleet.size ? ' Re-upload the transportation master to read Fleet Type.' : '')
+    + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
     + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
