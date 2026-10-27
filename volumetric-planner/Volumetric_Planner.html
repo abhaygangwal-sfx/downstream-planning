@@ -153,6 +153,15 @@ h3.sub{font-size:14px;margin:18px 0 4px}
   </div>
 
 
+  <section class="panel">
+    <h2><span class="step">3</span> LH Intransit</h2>
+    <p class="hint">Upload the LH Intransit export (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + <b>Shipment_Destination_dc</b>) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise Shipment_Destination_dc). Existing columns are kept as they are.</p>
+    <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="lhInfo"></div>
+    <div class="err" id="lhErr"></div>
+  </section>
+
   <div id="results" class="hidden">
     <div class="alert hidden" id="missingBox">
       <h3 id="missingTitle"></h3>
@@ -209,6 +218,32 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="tablewrap"><table><thead id="prevHead"></thead><tbody id="prevBody"></tbody></table></div>
     </section>
   </div>
+
+  <div id="lhResults" class="hidden">
+    <div class="kpis">
+      <div class="kpi"><div class="l">LH Intransit rows</div><div class="v" id="lhRows">0</div></div>
+      <div class="kpi"><div class="l">Next Loc from route mapping</div><div class="v" id="lhHit">0</div></div>
+      <div class="kpi" id="lhFallBox"><div class="l">Fallback to Shipment_Destination_dc</div><div class="v" id="lhFall">0</div></div>
+      <div class="kpi"><div class="l">Distinct Next Loc</div><div class="v" id="lhNextN">0</div></div>
+    </div>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">LH Intransit by Next Loc</h2>
+        <div class="row">
+          <input type="text" id="lhSearch" placeholder="Search…" style="width:140px">
+          <button class="btn primary" id="lhExport">Download LH Intransit + OD Pair, Next Loc</button>
+        </div>
+      </div>
+      <div class="muted" id="lhNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Next Loc</th><th class="num">Count of Awb_number</th><th class="num">From route mapping</th><th class="num">Fallback</th></tr></thead><tbody id="lhSumBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead"><h2 style="margin:0">LH Intransit preview <span class="muted" id="lhPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="tablewrap"><table><thead id="lhPrevHead"></thead><tbody id="lhPrevBody"></tbody></table></div>
+    </section>
+  </div>
 </div>
 
 <div id="pageCoeff" class="hidden">
@@ -241,7 +276,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -324,6 +359,12 @@ function textRuns(xml){
   while((m=re.exec(xml))) out+=m[1];
   return unx(out);
 }
+function serialToDate(n){
+  const d=new Date(Math.round((n-25569)*86400000)); const p=x=>String(x).padStart(2,'0');
+  const date=d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate());
+  const hasTime=d.getUTCHours()||d.getUTCMinutes()||d.getUTCSeconds();
+  return hasTime ? date+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds()) : date;
+}
 function colIndex(ref){ let n=0; for(const ch of ref){ const c=ch.charCodeAt(0); if(c<65||c>90) break; n=n*26+(c-64);} return n-1; }
 async function parseXLSX(buf){
   const z=await unzip(buf);
@@ -340,6 +381,17 @@ async function parseXLSX(buf){
   if(!z.has(sheetPath)) throw new Error('Could not find a worksheet in this file.');
   const sst=[]; const ss=await z.text('xl/sharedStrings.xml');
   if(ss){ const re=/<(?:\w+:)?si>([\s\S]*?)<\/(?:\w+:)?si>/g; let m; while((m=re.exec(ss))) sst.push(textRuns(m[1])); }
+  const dateXf=[]; const st=await z.text('xl/styles.xml');
+  if(st){
+    const custom={}; let mm; const nf=/<(?:\w+:)?numFmt\b[^>]*?numFmtId="(\d+)"[^>]*?formatCode="([^"]*)"/g;
+    while((mm=nf.exec(st))) custom[mm[1]]=unx(mm[2]);
+    const cx=/<(?:\w+:)?cellXfs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?cellXfs>/.exec(st);
+    if(cx){ const xr=/<(?:\w+:)?xf\b([^>]*)/g; while((mm=xr.exec(cx[1]))){
+      const id=+((/numFmtId="(\d+)"/.exec(mm[1])||[])[1]||0), code=custom[id]||'';
+      const clean=code.replace(/"[^"]*"|\[[^\]]*\]|\\./g,'');
+      dateXf.push((id>=14&&id<=22)||(id>=45&&id<=47)||(!!clean && /[dyhs]/i.test(clean) && /[dmyhs]/i.test(clean)));
+    } }
+  }
   const xml=await z.text(sheetPath);
   const rows=[]; const rowRe=/<(?:\w+:)?row\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?row>)/g;
   const cRe=/<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
@@ -357,6 +409,7 @@ async function parseXLSX(buf){
       else if(t==='inlineStr') val = textRuns(inner);
       else if(t==='b') val = v ? (v[1]==='1'?'TRUE':'FALSE') : '';
       else val = v ? unx(v[1]) : '';
+      if(!t && v && dateXf.length){ const sm=/\bs="(\d+)"/.exec(attrs); if(sm && dateXf[+sm[1]] && !isNaN(+val)) val=serialToDate(+val); }
       row[idx]=val;
     }
     for(let i=0;i<row.length;i++) if(row[i]===undefined) row[i]='';
@@ -683,6 +736,7 @@ $('exportNE').onclick=()=>{
 };
 $('originSel').onchange=()=>{
   state.planOrigin=$('originSel').value; try{localStorage.setItem(ORIGIN_KEY,state.planOrigin);}catch(e){}
+  computeLH();
   if(!state.tm.size){ $('tmPanel').classList.remove('hidden'); $('tmErr').textContent='Upload the transportation master sheet to see lanes for this hub.'; return; }
   if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
 };
@@ -798,7 +852,11 @@ function showRMInfo(){
   $('rmBtn').textContent = 'Route mapping sheet' + (state.rm.size ? ' ✓' : '');
 }
 (async()=>{
-  try{ const o=await kvGet('route'); if(o){ state.rm=new Map(o.list||[]); state.rmName=o.name||''; showRMInfo(); if(state.data) recompute(); } }catch(e){}
+  try{ const o=await kvGet('route'); if(o){
+    state.rm=new Map(o.list||[]); state.rmName=o.name||'';
+    state.rmOD=o.od ? new Map(o.od) : new Map([...state.rm.values()].map(v=>[normTM(v[2]+'-'+v[3]), v[0]]));
+    showRMInfo(); if(state.data) recompute(); computeLH();
+  } }catch(e){}
   showRMInfo();
 })();
 async function handleRMFile(file){
@@ -811,8 +869,10 @@ async function handleRMFile(file){
     const miss=Object.keys(need).filter(k=>need[k]<0);
     if(miss.length) throw new Error('This does not look like a route mapping: missing column'+(miss.length>1?'s ':' ')+miss.map(x=>({od:'"OD Pair"',origin:'"origin_dc"',dest:'"destination_dc"',next:'"Next Location"'})[x]).join(', ')+'.');
     const viaIdx=h.map((x,i)=>/^via\d+$/.test(x)?i:-1).filter(i=>i>=0);
-    const m=new Map();
+    const m=new Map(), od=new Map();
     rows.slice(1).forEach(r=>{
+      const odv=String(r[need.od]??'').trim(), nx=String(r[need.next]??'').trim();
+      if(odv && nx && !od.has(normTM(odv))) od.set(normTM(odv), nx);
       const o=String(r[need.origin]??'').trim(), d=String(r[need.dest]??'').trim();
       if(!o||!d) return;
       const vias=viaIdx.map(i=>String(r[i]??'').trim()).filter(Boolean);
@@ -820,14 +880,83 @@ async function handleRMFile(file){
       if(!m.has(k)) m.set(k,[String(r[need.next]??'').trim(), vias.join(' > '), o, d]);
     });
     if(!m.size) throw new Error('No origin and destination pairs found.');
-    state.rm=m; state.rmName=file.name;
-    await kvSet('route',{name:file.name,list:[...m.entries()]});
-    showRMInfo(); if(state.data) recompute();
+    state.rm=m; state.rmOD=od; state.rmName=file.name;
+    await kvSet('route',{name:file.name,list:[...m.entries()],od:[...od.entries()]});
+    showRMInfo(); if(state.data) recompute(); computeLH();
   }catch(e){ showRMInfo(); $('rmErr').textContent=e.message+(state.rm.size?' Your previously saved mapping is still in use.':''); }
 }
 $('rmBtn').onclick=()=>$('rmPanel').classList.toggle('hidden');
 $('rmClose').onclick=()=>$('rmPanel').classList.add('hidden');
 wireDrop('rmDrop','rmFile',handleRMFile);
+/* ---------- LH Intransit ----------
+   OD Pair  = Origin hub (top dropdown) + "-" + Shipment_Destination_dc
+   Next Loc = route mapping "Next Location" for that OD Pair, else Shipment_Destination_dc
+   Columns are found by header name, so column order can change. */
+const findCol=(headers,name)=>headers.findIndex(h=>String(h).trim().toLowerCase()===name.toLowerCase());
+async function handleLHFile(file){
+  $('lhErr').textContent=''; $('lhInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
+    if(findCol(headers,'Shipment_Destination_dc')<0) throw new Error('Could not find the "Shipment_Destination_dc" column in this file.');
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.lh={name:file.name,headers,rows:body};
+    $('lhInfo').innerHTML='<b>'+esc(file.name)+'</b> · '+fmt(body.length,0)+' rows · '+width+' columns';
+    computeLH();
+  }catch(e){ $('lhInfo').textContent=''; $('lhErr').textContent=e.message; }
+}
+function hubDisplay(){ return HUBS.find(h=>normTM(h)===state.planOrigin)||''; }
+function computeLH(){
+  const L=state.lh; if(!L){ $('lhResults').classList.add('hidden'); return; }
+  const di=findCol(L.headers,'Shipment_Destination_dc'); const hub=hubDisplay();
+  const od=new Array(L.rows.length), next=new Array(L.rows.length), src=new Array(L.rows.length);
+  let hit=0, fall=0;
+  for(let i=0;i<L.rows.length;i++){
+    const dest=String(L.rows[i][di]??'').trim();
+    od[i] = (hub && dest) ? hub+'-'+dest : '';
+    const nx = od[i] ? state.rmOD.get(normTM(od[i])) : undefined;
+    if(nx){ next[i]=nx; src[i]='route mapping'; hit++; }
+    else { next[i]=dest; src[i]=dest?'fallback':''; if(dest) fall++; }
+  }
+  L.od=od; L.next=next; L.src=src;
+  $('lhResults').classList.remove('hidden');
+  $('lhRows').textContent=fmt(L.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
+  $('lhFallBox').classList.toggle('warn',fall>0);
+  let note='';
+  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses Shipment_Destination_dc.';
+  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses Shipment_Destination_dc.';
+  else note='OD Pair = '+hub+'-Shipment_Destination_dc. Next Loc comes from the route mapping where the OD Pair matches, otherwise Shipment_Destination_dc.';
+  $('lhNote').textContent=note;
+  renderLHSummary(); renderLHPreview();
+}
+function renderLHSummary(){
+  const L=state.lh, g=new Map();
+  L.next.forEach((n,i)=>{ const k=n||'(blank)'; const e=g.get(k)||{n:0,r:0,f:0}; e.n++; if(L.src[i]==='route mapping') e.r++; else if(L.src[i]==='fallback') e.f++; g.set(k,e); });
+  $('lhNextN').textContent=fmt(g.size,0);
+  const q=norm($('lhSearch').value);
+  const list=[...g.entries()].filter(([k])=>!q||norm(disp(k)).includes(q)).sort((a,b)=>b[1].n-a[1].n);
+  $('lhSumBody').innerHTML=list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="num"><b>'+fmt(e.n,0)+'</b></td><td class="num">'+fmt(e.r,0)+'</td><td class="num">'+fmt(e.f,0)+'</td></tr>').join('')
+    + '<tr><td><b>'+(q?'Filtered total':'Grand total')+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].r,0),0)+'</td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].f,0),0)+'</td></tr>';
+}
+function renderLHPreview(){
+  const L=state.lh; const want=['Awb_number','Client','MM_destination','Shipment_Destination_dc','Delivery_hub'];
+  const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
+  const N=Math.min(200,L.rows.length);
+  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+2)+' columns';
+  $('lhPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++) html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td></tr>';
+  $('lhPrevBody').innerHTML=html;
+}
+$('lhSearch').oninput=()=>{ if(state.lh&&state.lh.next) renderLHSummary(); };
+$('lhExport').onclick=()=>{
+  const L=state.lh; if(!L) return;
+  const lines=[L.headers.concat(['OD Pair','Next Loc']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++) lines.push(L.rows[i].concat([L.od[i],L.next[i]]).map(csvCell).join(','));
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_next_loc_'+stamp()+'.csv',lines);
+};
+wireDrop('lhDrop','lhFile',handleLHFile);
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
