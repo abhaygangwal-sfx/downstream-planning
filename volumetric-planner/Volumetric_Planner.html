@@ -70,6 +70,8 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .alert.soft{background:var(--warn-soft)}
 td.wrapcell{white-space:normal;min-width:220px;max-width:520px}
 tr.muted td{color:var(--muted)}
+td.spill-pos{color:var(--bad);font-weight:650}
+td.spill-neg{color:var(--ok);font-weight:650}
 h3.sub{font-size:14px;margin:18px 0 4px}
 .alert.soft h3{color:var(--warn)}
 .alert .mrow{display:flex;gap:10px;align-items:center;padding:4px 0;flex-wrap:wrap}
@@ -175,7 +177,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">Count of FWD floor</th><th class="num">Count of LH intransit</th><th class="num">Count of Vol coeff</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">Count of FWD floor</th><th class="num">Count of LH intransit</th><th class="num">Count of Vol coeff</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -309,7 +311,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', tmFleet:new Map(), rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -784,13 +786,13 @@ $('backMain').onclick=()=>showPage('main');
 const TM_KEY='volumetricPlanner.tm.v4', ORIGIN_KEY='volumetricPlanner.originHub';
 const HUBS='Guwahati DC|Kolkata DC|Lucknow DC|Bhubneshwar DC|Malda DC|Silchar DC|Dibrugarh DC|Patna DC|Purnia DC|Ranchi DC|Sambalpur DC|Siliguri DC|Kolkata 2 DC|Varanasi DC|Kanpur DC|Ludhiana DC|NCR Bilaspur DC|NCR Bamnoli DC|OneNCR DC|Jammu DC|NCR Tauru DC|Jaipur DC|Indore DC|Bhopal DC|Raipur DC|Sagar DC|Bangalore DC|Hyderabad DC|Chennai DC|Kochi DC|Kozhikode DC|Mysore DC|Vijayawada DC|Coimbatore DC|Hubli DC|Madurai DC|Trichy DC|Visakhapatnam DC|Bangalore XD DC|Nagpur DC|Mumbai DC|Pune DC|Aurangabad DC|Surat DC|Ahmedabad DC|Udaipur DC|Srinagar DC|Moradabad DC|Jodhpur DC|Rajahmundry DC|Gorakhpur DC|Chandigarh DC|Akola DC|Jabalpur DC|Kolkata XD DC|Hyderabad REV DC|OneSRT DC|OneAMD DC|OneRJT DC|TwoNCR DC'.split('|');
 function saveTM(){
-  try{ localStorage.setItem(TM_KEY, JSON.stringify({name:state.tmName, list:[...state.tm.entries()], origins:state.tmOrigins})); }
+  try{ localStorage.setItem(TM_KEY, JSON.stringify({name:state.tmName, list:[...state.tm.entries()], origins:state.tmOrigins, fleet:[...state.tmFleet.entries()]})); }
   catch(e){ $('tmErr').textContent='Loaded, but this browser could not save the master for next time (storage full or blocked). Upload it again after reopening.'; }
 }
 function loadTM(){
   try{
     const raw=localStorage.getItem(TM_KEY); if(!raw) return;
-    const o=JSON.parse(raw); state.tm=new Map(o.list||[]); state.tmName=o.name||''; state.tmOrigins=o.origins||[];
+    const o=JSON.parse(raw); state.tm=new Map(o.list||[]); state.tmName=o.name||''; state.tmOrigins=o.origins||[]; state.tmFleet=new Map(o.fleet||[]);
   }catch(e){}
   fillOrigins(); showTMInfo();
 }
@@ -810,11 +812,11 @@ async function handleTMFile(file){
     const rows=await readFile(file);
     if(!rows.length) throw new Error('This file is empty.');
     const h=rows[0].map(x=>String(x).trim().toLowerCase());
-    const di=h.indexOf('destination'), li=h.indexOf('lane code'), loi=h.indexOf('lane origin');
+    const di=h.indexOf('destination'), li=h.indexOf('lane code'), loi=h.indexOf('lane origin'), fti=h.indexOf('fleet type');
     const miss=[di<0?'"Destination"':'', li<0?'"Lane Code"':''].filter(Boolean);
     if(miss.length) throw new Error('This does not look like a transportation master: missing '+miss.join(' and ')+' column'+(miss.length>1?'s':'')+' in the first row.');
     if(rows.length<2) throw new Error('No data rows found under the header.');
-    const m=new Map(), origins=new Map(); let used=0, skipped=0;
+    const m=new Map(), origins=new Map(), fleets=new Map(); let used=0, skipped=0;
     rows.slice(1).forEach((r,idx)=>{
       const dest=String(r[di]??'').trim(), lane=String(r[li]??'').trim();
       if(!dest||!lane){ skipped++; return; }
@@ -824,13 +826,17 @@ async function handleTMFile(file){
       const k=normTM(dest); let e=m.get(k); if(!e){ e={dest,cands:[]}; m.set(k,e); }
       let c=e.cands.find(x=>x.lane===lane); if(!c){ c={lane,o,n:0,i:idx}; e.cands.push(c); }
       c.n++; used++;
+      if(fti>=0){ const ft=String(r[fti]??'').trim(); if(ft){ let f=fleets.get(lane); if(!f){ f=new Map(); fleets.set(lane,f); } f.set(ft,(f.get(ft)||0)+1); } }
     });
     if(!m.size) throw new Error('No rows with both a Destination and a Lane Code were found.');
     state.tm=m; state.tmName=file.name;
+    /* one Fleet Type per lane: the most frequent; first listed on a tie */
+    state.tmFleet=new Map([...fleets.entries()].map(([lane,f])=>{ let best='',bn=-1; f.forEach((n,ft)=>{ if(n>bn){best=ft;bn=n;} }); return [lane,{fleet:best,multi:f.size>1,all:[...f.keys()]}]; }));
     state.tmOrigins=[...origins.entries()].sort((a,b)=>a[1].localeCompare(b[1],undefined,{sensitivity:'base'}));
     fillOrigins(); saveTM(); showTMInfo();
     if(skipped) $('tmInfo').innerHTML+=' <span class="muted">· '+fmt(skipped,0)+' rows skipped (blank Destination or Lane Code)</span>';
     if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
+    computeLH(); renderLaneView();
   }catch(e){ showTMInfo(); $('tmErr').textContent=e.message+(state.tm.size?' Your previously saved master is still in use.':''); }
 }
 $('tmBtn').onclick=()=>$('tmPanel').classList.toggle('hidden');
@@ -866,7 +872,7 @@ async function handleVCFile(file){
       m.set(normFleet(f), {fleet:f, capacity:c});
     });
     if(!m.size) throw new Error('No fleet types with a numeric capacity were found.');
-    state.vc=m; state.vcName=file.name; saveVC(); showVCInfo();
+    state.vc=m; state.vcName=file.name; saveVC(); showVCInfo(); renderLaneView();
     if(bad) $('vcInfo').innerHTML+=' <span class="muted">· '+fmt(bad,0)+' rows skipped (capacity not a number)</span>';
   }catch(e){ showVCInfo(); $('vcErr').textContent=e.message+(state.vc.size?' Your previously saved table is still in use.':''); }
 }
@@ -1019,22 +1025,41 @@ function laneTotals(){
   const rows=keys.map(k=>({lane:k, f:(F.get(k)||{v:0}).v, h:(H.get(k)||{v:0}).v}));
   return {rows, ne};
 }
+/* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
+function laneCapacity(lane){
+  const f=state.tmFleet.get(lane);
+  if(!f || !f.fleet) return {fleet:'', capacity:null};
+  const v=state.vc.get(normFleet(f.fleet));
+  return {fleet:f.fleet, multi:f.multi, all:f.all, capacity: v ? v.capacity : null};
+}
 function renderLaneView(){
   if(!state.data && !state.lh){ $('laneView').classList.add('hidden'); return; }
   $('laneView').classList.remove('hidden');
   const {rows,ne}=laneTotals();
   const tf=rows.reduce((a,x)=>a+x.f,0), th=rows.reduce((a,x)=>a+x.h,0);
-  $('laneBody').innerHTML = rows.map(x=>'<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.f,0)+'</td><td class="num">'+fmt(x.h,0)+'</td><td class="num"><b>'+fmt(x.f+x.h,0)+'</b></td></tr>').join('')
-    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf,0)+'</b></td><td class="num"><b>'+fmt(th,0)+'</b></td><td class="num"><b>'+fmt(tf+th,0)+'</b></td></tr>'
-;
+  $('laneBody').innerHTML = rows.map(x=>{
+    const cap=laneCapacity(x.lane), total=x.f+x.h;
+    let fleetCell, capCell, spillCell;
+    if(!cap.fleet){ fleetCell='<span class="tag miss">no fleet type</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
+    else {
+      fleetCell=esc(cap.fleet)+(cap.multi?' <span class="tag def" title="Lane has '+esc(cap.all.join(', '))+'">multiple</span>':'');
+      if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
+      else { const sp=total-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp,0)+'</td>'; }
+    }
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.f,0)+'</td><td class="num">'+fmt(x.h,0)+'</td><td class="num"><b>'+fmt(total,0)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
+  }).join('')
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf,0)+'</b></td><td class="num"><b>'+fmt(th,0)+'</b></td><td class="num"><b>'+fmt(tf+th,0)+'</b></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
-    + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit. Not-eligible shipments are excluded.'
+    + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit. Spillover = Vol coeff − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
+    + (state.tm.size && !state.tmFleet.size ? ' Re-upload the transportation master to read Fleet Type.' : '')
+    + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
 $('laneExport').onclick=()=>{
   const {rows,ne}=laneTotals();
-  const lines=['lane_code,count_of_fwd_floor,count_of_lh_intransit,count_of_vol_coeff'];
-  rows.forEach(x=>lines.push([csvCell(disp(x.lane)),x.f,x.h,x.f+x.h].join(',')));
+  const lines=['lane_code,count_of_fwd_floor,count_of_lh_intransit,count_of_vol_coeff,fleet_type,vehicle_capacity,spillover'];
+  rows.forEach(x=>{ const cap=laneCapacity(x.lane), t=x.f+x.h;
+    lines.push([csvCell(disp(x.lane)),x.f,x.h,t,csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':t-cap.capacity].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
