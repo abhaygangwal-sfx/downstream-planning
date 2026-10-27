@@ -194,7 +194,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">Count of FWD floor</th><th class="num">Count of LH intransit</th><th class="num">Count of Vol coeff</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">Count of FWD floor</th><th class="num">Sum of vol of FWD floor</th><th class="num">Count of LH intransit</th><th class="num">Sum of vol LH intransit</th><th class="num">total Count of Vol coeff</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -1061,26 +1061,26 @@ function renderLHLanes(){
   $('lhLaneNote').textContent = (hasLanes ? '' : 'Upload the transportation master to see lanes. ')
     + 'Each row adds its Client coefficient (same rules as Floor pendency) to the lane of its Next Loc'+(state.planOrigin?' for the selected hub.':'.');
 }
-/* Lane totals: Floor pendency volumetric + LH Intransit volumetric per lane. */
+/* Lane totals: per lane, floor and LH rows are counted and their client volumetric coefficients summed. */
 function laneTotals(){
-  const F=new Map(), H=new Map(); const ne={f:0,h:0,nf:0,nh:0};
-  const add=(map,k,v)=>{ const e=map.get(k)||{v:0}; e.v+=v; map.set(k,e); };
+  const F=new Map(), H=new Map();
+  const add=(map,k,v)=>{ const e=map.get(k)||{n:0,v:0}; e.n++; if(v!=null) e.v+=v; map.set(k,e); };
   if(state.data && state.nlIdx>=0){
     const {rows}=state.data;
     for(let i=0;i<rows.length;i++){
       const res=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:'');
-      if(res.status==='ne'){ ne.nf++; } else add(F,res.lane,1);
+      if(res.status!=='ne') add(F,res.lane,coeffFor(rows[i][state.clientIdx]).c);
     }
   }
   if(state.lh){
     for(let i=0;i<state.lh.rows.length;i++){
       const res=state.lh.res[i];
-      if(res.status==='ne'){ ne.nh++; } else add(H,res.lane,1);
+      if(res.status!=='ne') add(H,res.lane,state.lh.coef[i].c);
     }
   }
   const keys=[...new Set([...F.keys(),...H.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
-  const rows=keys.map(k=>({lane:k, f:(F.get(k)||{v:0}).v, h:(H.get(k)||{v:0}).v}));
-  return {rows, ne};
+  return keys.map(k=>{ const f=F.get(k)||{n:0,v:0}, h=H.get(k)||{n:0,v:0};
+    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v}; });
 }
 /* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
 function laneCapacity(lane){
@@ -1092,31 +1092,31 @@ function laneCapacity(lane){
 function renderLaneView(){
   if(!state.data && !state.lh){ $('laneView').classList.add('hidden'); return; }
   $('laneView').classList.remove('hidden');
-  const {rows,ne}=laneTotals();
-  const tf=rows.reduce((a,x)=>a+x.f,0), th=rows.reduce((a,x)=>a+x.h,0);
+  const rows=laneTotals();
+  const sum=k=>rows.reduce((a,x)=>a+x[k],0);
   $('laneBody').innerHTML = rows.map(x=>{
-    const cap=laneCapacity(x.lane), total=x.f+x.h;
+    const cap=laneCapacity(x.lane), tc=x.fn+x.hn, tv=x.fv+x.hv;
     let fleetCell, capCell, spillCell;
     if(!cap.fleet){ fleetCell='<span class="tag miss">'+(state.tmFleet.size?'no fleet type':'re-upload master')+'</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
     else {
       fleetCell=esc(cap.fleet)+(cap.multi?' <span class="tag def" title="Lane has '+esc(cap.all.join(', '))+'">multiple</span>':'');
       if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
-      else { const sp=total-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp,0)+'</td>'; }
+      else { const sp=tv-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp)+'</td>'; }
     }
-    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.f,0)+'</td><td class="num">'+fmt(x.h,0)+'</td><td class="num"><b>'+fmt(total,0)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fn,0)+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hn,0)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
   }).join('')
-    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf,0)+'</b></td><td class="num"><b>'+fmt(th,0)+'</b></td><td class="num"><b>'+fmt(tf+th,0)+'</b></td><td></td><td></td><td></td></tr>';
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv'))+'</b></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
-    + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit. Spillover = Vol coeff − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
+    + 'Count = number of shipments per lane. Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = Sum of vol of FWD floor + Sum of vol LH intransit. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
     + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
     + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
 $('laneExport').onclick=()=>{
-  const {rows,ne}=laneTotals();
-  const lines=['lane_code,count_of_fwd_floor,count_of_lh_intransit,count_of_vol_coeff,fleet_type,vehicle_capacity,spillover'];
-  rows.forEach(x=>{ const cap=laneCapacity(x.lane), t=x.f+x.h;
-    lines.push([csvCell(disp(x.lane)),x.f,x.h,t,csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':t-cap.capacity].join(',')); });
+  const rows=laneTotals();
+  const lines=['lane_code,count_of_fwd_floor,sum_of_vol_fwd_floor,count_of_lh_intransit,sum_of_vol_lh_intransit,total_count_of_vol_coeff,total_volumetric,fleet_type,vehicle_capacity,spillover'];
+  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv;
+    lines.push([csvCell(disp(x.lane)),x.fn,+x.fv.toFixed(4),x.hn,+x.hv.toFixed(4),x.fn+x.hn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
