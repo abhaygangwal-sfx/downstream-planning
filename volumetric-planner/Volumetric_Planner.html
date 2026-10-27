@@ -1023,16 +1023,15 @@ function renderLaneView(){
   const tf=rows.reduce((a,x)=>a+x.f,0), th=rows.reduce((a,x)=>a+x.h,0);
   $('laneBody').innerHTML = rows.map(x=>'<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.f,0)+'</td><td class="num">'+fmt(x.h,0)+'</td><td class="num"><b>'+fmt(x.f+x.h,0)+'</b></td></tr>').join('')
     + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf,0)+'</b></td><td class="num"><b>'+fmt(th,0)+'</b></td><td class="num"><b>'+fmt(tf+th,0)+'</b></td></tr>'
-    + ((ne.nf||ne.nh) ? '<tr class="muted"><td>Not eligible (not in lanes)</td><td class="num">'+fmt(ne.nf,0)+'</td><td class="num">'+fmt(ne.nh,0)+'</td><td class="num">'+fmt(ne.nf+ne.nh,0)+'</td></tr>' : '');
+;
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
-    + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit.'
+    + 'Counts of shipments per lane. Vol coeff = FWD floor + LH intransit. Not-eligible shipments are excluded.'
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
 $('laneExport').onclick=()=>{
   const {rows,ne}=laneTotals();
   const lines=['lane_code,count_of_fwd_floor,count_of_lh_intransit,count_of_vol_coeff'];
   rows.forEach(x=>lines.push([csvCell(disp(x.lane)),x.f,x.h,x.f+x.h].join(',')));
-  lines.push(['Not eligible',ne.nf,ne.nh,ne.nf+ne.nh].join(','));
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
