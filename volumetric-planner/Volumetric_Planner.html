@@ -93,7 +93,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <h1>Volumetric Planner</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
-    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
+    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
   </header>
 
   <section class="panel hidden" id="tmPanel">
@@ -106,6 +106,18 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <input type="file" id="tmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
     <div class="fileinfo" id="tmInfo"></div>
     <div class="err" id="tmErr"></div>
+  </section>
+
+  <section class="panel hidden" id="hmPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Hub mapping sheet</h2>
+      <button class="btn" id="hmClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>hub_name</b>, <b>DC_name</b>, <b>dc_identifier</b>, <b>dc_city</b> and <b>Zone</b>. Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="hmDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="hmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="hmInfo"></div>
+    <div class="err" id="hmErr"></div>
   </section>
 
   <div class="grid2">
@@ -217,7 +229,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -447,7 +459,7 @@ function recompute(){
   const laneMode=state.groupIdx===-1;
   const {rows}=state.data, ci=state.clientIdx, gi=state.groupIdx;
   const per=new Array(rows.length); const groups=new Map(); const missing=new Map(); const matchedClients=new Set();
-  const neMap=new Map(), ambMap=new Map();
+  const neMap=new Map(), ambMap=new Map(); const hmHit=new Set(), nlSeen=new Set();
   let total=0, missRows=0, neN=0;
   for(let i=0;i<rows.length;i++){
     const client=rows[i][ci]; const r=coeffFor(client); per[i]=r;
@@ -456,6 +468,7 @@ function recompute(){
     let gk, nlName='', nlKey='';
     if(laneMode){
       const nl=rows[i][state.nlIdx]; nlName=String(nl??'').trim()||'(blank)'; nlKey=normTM(nl)||'(blank)';
+      if(state.hm.size){ nlSeen.add(nlKey); if(state.hm.has(normTM(nl))) hmHit.add(nlKey); }
       const res=resolveLane(nl, state.locIdx>=0?rows[i][state.locIdx]:'');
       if(res.status==='ne'){
         neN++; const m=neMap.get(nlKey)||{name:nlName,n:0,vol:0}; m.n++; if(r.c!=null) m.vol+=r.c; neMap.set(nlKey,m);
@@ -471,6 +484,7 @@ function recompute(){
     groups.set(gk,g);
   }
   state.computed={per,groups,total,neMap,ambMap,neN,laneMode};
+  if(state.hm.size && laneMode) $('hmInfo').innerHTML='<b>'+esc(state.hmName)+'</b> · '+fmt(hmHit.size,0)+' of '+fmt(nlSeen.size,0)+' next_location values found in the hub mapping';
   $('kRows').textContent=fmt(rows.length,0);
   $('kVol').textContent=fmt(total);
   $('kClients').textContent=fmt(matchedClients.size,0);
@@ -718,6 +732,46 @@ async function handleTMFile(file){
 $('tmBtn').onclick=()=>$('tmPanel').classList.toggle('hidden');
 $('tmClose').onclick=()=>$('tmPanel').classList.add('hidden');
 wireDrop('tmDrop','tmFile',handleTMFile);
+/* ---------- hub mapping sheet ---------- */
+const HM_KEY='volumetricPlanner.hm.v1';
+function saveHM(){
+  try{ localStorage.setItem(HM_KEY, JSON.stringify({name:state.hmName, list:[...state.hm.entries()]})); }
+  catch(e){ $('hmErr').textContent='Loaded, but this browser could not save the hub mapping for next time.'; }
+}
+function loadHM(){
+  try{ const raw=localStorage.getItem(HM_KEY); if(!raw) return; const o=JSON.parse(raw); state.hm=new Map(o.list||[]); state.hmName=o.name||''; }catch(e){}
+  showHMInfo();
+}
+function showHMInfo(){
+  $('hmInfo').innerHTML = state.hm.size ? '<b>'+esc(state.hmName)+'</b> · '+fmt(state.hm.size,0)+' hub and DC names loaded' : '';
+  $('hmBtn').textContent = 'Hub mapping sheet' + (state.hm.size ? ' ✓' : '');
+}
+async function handleHMFile(file){
+  $('hmErr').textContent=''; $('hmInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const need={hub_name:h.indexOf('hub_name'),DC_name:h.indexOf('dc_name'),dc_identifier:h.indexOf('dc_identifier'),dc_city:h.indexOf('dc_city'),Zone:h.indexOf('zone')};
+    const miss=Object.keys(need).filter(k=>need[k]<0);
+    if(miss.length) throw new Error('This does not look like a hub mapping: missing column'+(miss.length>1?'s ':' ')+miss.map(x=>'"'+x+'"').join(', ')+'.');
+    const m=new Map();
+    rows.slice(1).forEach(r=>{
+      const hub=String(r[need.hub_name]??'').trim(), dc=String(r[need.DC_name]??'').trim();
+      if(!hub && !dc) return;
+      const rec=[String(r[need.Zone]??'').trim(), dc, String(r[need.dc_identifier]??'').trim(), String(r[need.dc_city]??'').trim(), hub];
+      if(hub && !m.has(normTM(hub))) m.set(normTM(hub), rec);
+      if(dc && !m.has(normTM(dc))) m.set(normTM(dc), rec);
+    });
+    if(!m.size) throw new Error('No hub or DC names found.');
+    state.hm=m; state.hmName=file.name; saveHM(); showHMInfo();
+    if(state.data) recompute();
+  }catch(e){ showHMInfo(); $('hmErr').textContent=e.message+(state.hm.size?' Your previously saved mapping is still in use.':''); }
+}
+$('hmBtn').onclick=()=>$('hmPanel').classList.toggle('hidden');
+$('hmClose').onclick=()=>$('hmPanel').classList.add('hidden');
+wireDrop('hmDrop','hmFile',handleHMFile);
+loadHM();
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
