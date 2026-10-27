@@ -93,7 +93,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <h1>Volumetric Planner</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
-    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
+    <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="vcBtn">Vehicle capacity</button><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="hmBtn">Hub mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
   </header>
 
   <section class="panel hidden" id="tmPanel">
@@ -232,6 +232,18 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     </section>
   </div>
 
+  <section class="panel hidden" id="vcPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Vehicle capacity</h2>
+      <button class="btn" id="vcClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>Fleet Type</b> and <b>Capacity</b>. Fleet names are matched ignoring case, spaces and underscores. Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="vcDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="vcFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="vcInfo"></div>
+    <div class="err" id="vcErr"></div>
+  </section>
+
   <div id="lhResults" class="hidden">
     <div class="kpis">
       <div class="kpi"><div class="l">LH Intransit rows</div><div class="v" id="lhRows">0</div></div>
@@ -305,7 +317,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 "use strict";
 const $ = id => document.getElementById(id);
 const STORE = 'volumetricPlanner.coeffs.v1';
-const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', hm:new Map(), hmName:'', rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
 
 const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
 const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
@@ -833,6 +845,44 @@ async function handleTMFile(file){
 $('tmBtn').onclick=()=>$('tmPanel').classList.toggle('hidden');
 $('tmClose').onclick=()=>$('tmPanel').classList.add('hidden');
 wireDrop('tmDrop','tmFile',handleTMFile);
+/* ---------- vehicle capacity ---------- */
+const VC_KEY='volumetricPlanner.vc.v1';
+const normFleet = s => String(s==null?'':s).replace(/[_\s]+/g,' ').trim().toLowerCase();
+function saveVC(){
+  try{ localStorage.setItem(VC_KEY, JSON.stringify({name:state.vcName, list:[...state.vc.entries()]})); }
+  catch(e){ $('vcErr').textContent='Loaded, but this browser could not save the capacity table for next time.'; }
+}
+function showVCInfo(){
+  $('vcInfo').innerHTML = state.vc.size ? '<b>'+esc(state.vcName)+'</b> · '+fmt(state.vc.size,0)+' fleet types loaded' : '';
+  $('vcBtn').textContent = 'Vehicle capacity' + (state.vc.size ? ' ✓' : '');
+}
+try{ const raw=localStorage.getItem(VC_KEY); if(raw){ const o=JSON.parse(raw); state.vc=new Map(o.list||[]); state.vcName=o.name||''; } }catch(e){}
+showVCInfo();
+async function handleVCFile(file){
+  $('vcErr').textContent=''; $('vcInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const fi=h.indexOf('fleet type'), ci=h.indexOf('capacity');
+    const miss=[fi<0?'"Fleet Type"':'', ci<0?'"Capacity"':''].filter(Boolean);
+    if(miss.length) throw new Error('This does not look like a vehicle capacity file: missing '+miss.join(' and ')+' column'+(miss.length>1?'s':'')+'.');
+    const m=new Map(); let bad=0;
+    rows.slice(1).forEach(r=>{
+      const f=String(r[fi]??'').trim(), c=toNum(r[ci]);
+      if(!f) return;
+      if(isNaN(c)){ bad++; return; }
+      m.set(normFleet(f), {fleet:f, capacity:c});
+    });
+    if(!m.size) throw new Error('No fleet types with a numeric capacity were found.');
+    state.vc=m; state.vcName=file.name; saveVC(); showVCInfo();
+    if(bad) $('vcInfo').innerHTML+=' <span class="muted">· '+fmt(bad,0)+' rows skipped (capacity not a number)</span>';
+  }catch(e){ showVCInfo(); $('vcErr').textContent=e.message+(state.vc.size?' Your previously saved table is still in use.':''); }
+}
+$('vcBtn').onclick=()=>$('vcPanel').classList.toggle('hidden');
+$('vcClose').onclick=()=>$('vcPanel').classList.add('hidden');
+wireDrop('vcDrop','vcFile',handleVCFile);
+
 /* ---------- hub mapping sheet ---------- */
 const HM_KEY='volumetricPlanner.hm.v1';
 function saveHM(){
