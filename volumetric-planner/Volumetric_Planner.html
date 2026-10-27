@@ -41,7 +41,8 @@ h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
 .lhopt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
 .lhpick{display:flex;gap:6px;align-items:flex-start;cursor:pointer;font-size:14px}
 .lhpick b{white-space:nowrap}
-.lhcols{font-size:12px;margin:2px 0 8px 22px}
+.lhcols{font-size:12px;margin:2px 0 8px 0}
+.linkbtn{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}
 .fileinfo{margin-top:10px;font-size:13px;color:var(--muted);min-height:20px}
 .fileinfo b{color:var(--ink)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -162,9 +163,9 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     </section>
     <section class="panel">
       <h2><span class="step">2</span> LH Intransit</h2>
-      <p class="hint">Upload either source (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + destination column) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise the destination column). Existing columns are kept as they are.</p>
+      <p class="hint">Upload one source or both (CSV or Excel). When both are uploaded, their rows are added together. Adds <b>OD Pair</b> (Origin hub + destination column) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise the destination column). Existing columns are kept as they are.</p>
       <div class="lhopt">
-        <label class="lhpick"><input type="radio" name="lhSrc" value="A" checked> <b>Option A:</b> LH Intransit — Data from Ecom DC Floor Pendency</label>
+        <div class="lhpick"><b>A:</b> LH Intransit — Data from Ecom DC Floor Pendency</div>
         <div class="muted lhcols">Destination: <b>Shipment_Destination_dc</b> · Client: <b>Client</b></div>
         <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
         <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
@@ -172,14 +173,13 @@ h3.sub{font-size:14px;margin:18px 0 4px}
         <div class="err" id="lhErr"></div>
       </div>
       <div class="lhopt">
-        <label class="lhpick"><input type="radio" name="lhSrc" value="B"> <b>Option B:</b> LH Intransit — Data from LH Incoming Vehicle Visibility Dashboard</label>
+        <div class="lhpick"><b>B:</b> LH Intransit — Data from LH Incoming Vehicle Visibility Dashboard</div>
         <div class="muted lhcols">Destination: <b>Shipment_Final_Destination_dc</b> · Client: <b>client_name</b></div>
         <button class="drop" id="lhDropB" type="button"><strong>Choose file</strong> or drop it here</button>
         <input type="file" id="lhFileB" accept=".csv,.xlsx,.txt,.tsv" hidden>
         <div class="fileinfo" id="lhInfoB"></div>
         <div class="err" id="lhErrB"></div>
       </div>
-      <p class="hint" style="margin-top:8px">The selected option feeds LH Intransit results and Lane totals. Uploading a file selects its option.</p>
     </section>
   </div>
 
@@ -955,17 +955,20 @@ wireDrop('rmDrop','rmFile',handleRMFile);
 const findCol=(headers,name)=>headers.findIndex(h=>String(h).trim().toLowerCase()===name.toLowerCase());
 /* Two LH Intransit sources share all logic; only the destination and client columns differ. */
 const LH_SRC={
-  A:{label:'Option A: Ecom DC Floor Pendency', dest:'Shipment_Destination_dc', client:'Client', info:'lhInfo', err:'lhErr'},
-  B:{label:'Option B: LH Incoming Vehicle Visibility Dashboard', dest:'Shipment_Final_Destination_dc', client:'client_name', info:'lhInfoB', err:'lhErrB'}
+  A:{label:'Ecom DC Floor Pendency', dest:'Shipment_Destination_dc', client:'Client', info:'lhInfo', err:'lhErr'},
+  B:{label:'LH Incoming Vehicle Visibility Dashboard', dest:'Shipment_Final_Destination_dc', client:'client_name', info:'lhInfoB', err:'lhErrB'}
 };
-state.lhSets={}; state.lhKey='A';
-function useLH(key){
-  state.lhKey=key; state.lh=state.lhSets[key]||null;
-  document.querySelectorAll('input[name="lhSrc"]').forEach(r=>{ r.checked=(r.value===key); });
-  if(state.lh) computeLH(); else { $('lhResults').classList.add('hidden'); renderLaneView(); }
+state.lhSets={};
+function showLHInfo(key){
+  const S=LH_SRC[key], L=state.lhSets[key];
+  if(!L){ $(S.info).textContent=''; return; }
+  $(S.info).innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
+    +(findCol(L.headers,S.client)<0?' · <span class="tag def">no '+esc(S.client)+' column, coefficient 1 used</span>':'')
+    +' · <button class="linkbtn" data-lhremove="'+key+'">Remove</button>';
+  $(S.info).querySelector('[data-lhremove]').onclick=()=>{ delete state.lhSets[key]; showLHInfo(key); computeLH(); };
 }
 async function handleLHFile(file,key){
-  key=key||'A'; const S=LH_SRC[key];
+  const S=LH_SRC[key];
   $(S.err).textContent=''; $(S.info).textContent='Reading '+file.name+'…';
   try{
     const rows=await readFile(file);
@@ -974,39 +977,58 @@ async function handleLHFile(file,key){
     if(findCol(headers,S.dest)<0) throw new Error('Could not find the "'+S.dest+'" column in this file.');
     const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
     state.lhSets[key]={name:file.name,headers,rows:body,key};
-    $(S.info).innerHTML='<b>'+esc(file.name)+'</b> · '+fmt(body.length,0)+' rows · '+width+' columns'+(findCol(headers,S.client)<0?' · <span class="tag def">no '+esc(S.client)+' column, coefficient 1 used</span>':'');
-    useLH(key);
-  }catch(e){ $(S.info).textContent=''; $(S.err).textContent=e.message; }
+    showLHInfo(key); computeLH();
+  }catch(e){ showLHInfo(key); $(S.err).textContent=e.message+(state.lhSets[key]?' The previous file is still in use.':''); }
 }
 function hubDisplay(){ return HUBS.find(h=>normTM(h)===state.planOrigin)||''; }
-function computeLH(){
-  const L=state.lh; if(!L){ $('lhResults').classList.add('hidden'); return; }
-  const S=LH_SRC[L.key||'A'];
-  const di=findCol(L.headers,S.dest); const hub=hubDisplay();
-  const od=new Array(L.rows.length), next=new Array(L.rows.length), src=new Array(L.rows.length);
+/* Same rules for each source; only its destination and client columns differ. */
+function computeLHSet(L,hub){
+  const S=LH_SRC[L.key], n=L.rows.length;
+  const di=findCol(L.headers,S.dest), ci=findCol(L.headers,S.client);
+  L.od=new Array(n); L.next=new Array(n); L.src=new Array(n); L.coef=new Array(n); L.res=new Array(n);
   let hit=0, fall=0;
-  for(let i=0;i<L.rows.length;i++){
+  for(let i=0;i<n;i++){
     const dest=String(L.rows[i][di]??'').trim();
-    od[i] = (hub && dest) ? hub+'-'+dest : '';
-    const nx = od[i] ? state.rmOD.get(normTM(od[i])) : undefined;
-    if(nx){ next[i]=nx; src[i]='route mapping'; hit++; }
-    else { next[i]=dest; src[i]=dest?'fallback':''; if(dest) fall++; }
+    L.od[i] = (hub && dest) ? hub+'-'+dest : '';
+    const nx = L.od[i] ? state.rmOD.get(normTM(L.od[i])) : undefined;
+    if(nx){ L.next[i]=nx; L.src[i]='route mapping'; hit++; }
+    else { L.next[i]=dest; L.src[i]=dest?'fallback':''; if(dest) fall++; }
+    L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
+    L.res[i]=resolveLane(L.next[i], hub);
   }
-  L.od=od; L.next=next; L.src=src;
-  const ciL=findCol(L.headers,S.client);
-  L.coef=new Array(L.rows.length); L.res=new Array(L.rows.length);
-  for(let i=0;i<L.rows.length;i++){
-    L.coef[i]=coeffFor(ciL>=0?L.rows[i][ciL]:'');
-    L.res[i]=resolveLane(next[i], hub);
+  return {hit,fall};
+}
+/* Combine the uploaded sources (A, B or both) into one view; columns are matched by header name. */
+function computeLH(){
+  const keys=['A','B'].filter(k=>state.lhSets[k]);
+  if(!keys.length){ state.lh=null; $('lhResults').classList.add('hidden'); renderLaneView(); return; }
+  const hub=hubDisplay(); let hit=0, fall=0;
+  const sets=keys.map(k=>{ const L=state.lhSets[k]; const r=computeLHSet(L,hub); hit+=r.hit; fall+=r.fall; return L; });
+  let C;
+  if(sets.length===1){ C=Object.assign({},sets[0]); C.from=sets[0].rows.map(()=>sets[0].key); }
+  else {
+    const headers=[], seen=new Map();
+    sets.forEach(L=>L.headers.forEach(h=>{ const k=h.toLowerCase(); if(!seen.has(k)){ seen.set(k,headers.length); headers.push(h); } }));
+    C={name:'lh_intransit_A_B', headers, rows:[], od:[], next:[], src:[], coef:[], res:[], from:[], key:'AB'};
+    sets.forEach(L=>{
+      const map=L.headers.map(h=>seen.get(h.toLowerCase()));
+      for(let i=0;i<L.rows.length;i++){
+        const r=new Array(headers.length).fill(''); map.forEach((t,j)=>{ if(r[t]==='') r[t]=L.rows[i][j]; });
+        C.rows.push(r); C.od.push(L.od[i]); C.next.push(L.next[i]); C.src.push(L.src[i]); C.coef.push(L.coef[i]); C.res.push(L.res[i]); C.from.push(L.key);
+      }
+    });
   }
+  state.lh=C;
+  const dests=keys.map(k=>LH_SRC[k].dest).join(' / ');
   $('lhResults').classList.remove('hidden');
-  $('lhRows').textContent=fmt(L.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
+  $('lhRows').textContent=fmt(C.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
   $('lhFallBox').classList.toggle('warn',fall>0);
+  $('lhFallLbl').textContent='Fallback to '+dests;
+  $('lhSrcNote').textContent='· '+keys.map(k=>k+': '+LH_SRC[k].label+' ('+fmt(state.lhSets[k].rows.length,0)+' rows)').join(' + ');
   let note='';
-  $('lhFallLbl').textContent='Fallback to '+S.dest; $('lhSrcNote').textContent='· '+S.label;
-  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses '+S.dest+'.';
-  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses '+S.dest+'.';
-  else note='OD Pair = '+hub+'-'+S.dest+'. Next Loc comes from the route mapping where the OD Pair matches, otherwise '+S.dest+'.';
+  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses '+dests+'.';
+  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses '+dests+'.';
+  else note='OD Pair = '+hub+'-'+dests+'. Next Loc comes from the route mapping where the OD Pair matches, otherwise '+dests+'.';
   $('lhNote').textContent=note;
   renderLHSummary(); renderLHLanes(); renderLHPreview(); renderLaneView();
 }
@@ -1098,15 +1120,15 @@ $('laneExport').onclick=()=>{
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
-  const L=state.lh; const S=LH_SRC[L.key||'A']; const want=['Awb_number',S.client,'MM_destination',S.dest,'Delivery_hub'];
-  const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
+  const L=state.lh; const want=['Awb_number','Client','client_name','MM_destination','Shipment_Destination_dc','Shipment_Final_Destination_dc','Delivery_hub'];
+  const cols=[...new Set(want.map(w=>findCol(L.headers,w)).filter(i=>i>=0))];
   const N=Math.min(200,L.rows.length);
-  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+6)+' columns';
-  $('lhPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th><th class="num">volumetric_coeff</th><th>Lane Code</th></tr>';
+  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+7)+' columns';
+  $('lhPrevHead').innerHTML='<tr><th>LH source</th>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th><th class="num">volumetric_coeff</th><th>Lane Code</th></tr>';
   let html='';
   for(let r=0;r<N;r++){
     const rs=L.res[r], c=L.coef[r];
-    html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td>'
+    html+='<tr><td>'+L.from[r]+'</td>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td>'
       +'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ne'?'<span class="tag miss">not eligible</span>':esc(rs.lane))+'</td></tr>';
   }
   $('lhPrevBody').innerHTML=html;
@@ -1114,12 +1136,12 @@ function renderLHPreview(){
 $('lhSearch').oninput=()=>{ if(state.lh&&state.lh.next) renderLHSummary(); };
 $('lhExport').onclick=()=>{
   const L=state.lh; if(!L) return;
-  const lines=[L.headers.concat(['OD Pair','Next Loc','volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  const lines=[['LH source'].concat(L.headers).concat(['OD Pair','Next Loc','volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
   for(let i=0;i<L.rows.length;i++){
     const rs=L.res[i], c=L.coef[i];
-    lines.push(L.rows[i].concat([L.od[i],L.next[i],c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+    lines.push([L.from[i]].concat(L.rows[i]).concat([L.od[i],L.next[i],c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
   }
-  download(L.name.replace(/\.[^.]+$/,'')+'_option'+(L.key||'A')+'_with_lanes_'+stamp()+'.csv',lines);
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
 };
 $('lhLaneExport').onclick=()=>{
   const L=state.lh; if(!L) return;
@@ -1127,11 +1149,10 @@ $('lhLaneExport').onclick=()=>{
   for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.next[i])); lanes.set(rs.lane,e); }
   const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
   [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
-  download('lh_intransit_option'+(L.key||'A')+'_lanes_'+stamp()+'.csv',lines);
+  download('lh_intransit_'+L.key+'_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('lhDrop','lhFile',f=>handleLHFile(f,'A'));
 wireDrop('lhDropB','lhFileB',f=>handleLHFile(f,'B'));
-document.querySelectorAll('input[name="lhSrc"]').forEach(r=>r.onchange=()=>{ if(r.checked) useLH(r.value); });
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; localStorage.removeItem('volumetricPlanner.hm.v1'); }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
