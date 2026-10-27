@@ -38,6 +38,10 @@ h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
 .drop{border:1.5px dashed var(--line);border-radius:10px;padding:22px 14px;text-align:center;cursor:pointer;transition:.15s;background:transparent;width:100%;color:var(--ink);font:inherit}
 .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
 .drop strong{color:var(--accent)}
+.lhopt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
+.lhpick{display:flex;gap:6px;align-items:flex-start;cursor:pointer;font-size:14px}
+.lhpick b{white-space:nowrap}
+.lhcols{font-size:12px;margin:2px 0 8px 22px}
 .fileinfo{margin-top:10px;font-size:13px;color:var(--muted);min-height:20px}
 .fileinfo b{color:var(--ink)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -158,11 +162,24 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     </section>
     <section class="panel">
       <h2><span class="step">2</span> LH Intransit</h2>
-      <p class="hint">Upload the LH Intransit export (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + <b>Shipment_Destination_dc</b>) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise Shipment_Destination_dc). Existing columns are kept as they are.</p>
-      <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
-      <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
-      <div class="fileinfo" id="lhInfo"></div>
-      <div class="err" id="lhErr"></div>
+      <p class="hint">Upload either source (CSV or Excel). Adds <b>OD Pair</b> (Origin hub + destination column) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise the destination column). Existing columns are kept as they are.</p>
+      <div class="lhopt">
+        <label class="lhpick"><input type="radio" name="lhSrc" value="A" checked> <b>Option A:</b> LH Intransit — Data from Ecom DC Floor Pendency</label>
+        <div class="muted lhcols">Destination: <b>Shipment_Destination_dc</b> · Client: <b>Client</b></div>
+        <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+        <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+        <div class="fileinfo" id="lhInfo"></div>
+        <div class="err" id="lhErr"></div>
+      </div>
+      <div class="lhopt">
+        <label class="lhpick"><input type="radio" name="lhSrc" value="B"> <b>Option B:</b> LH Intransit — Data from LH Incoming Vehicle Visibility Dashboard</label>
+        <div class="muted lhcols">Destination: <b>Shipment_Final_Destination_dc</b> · Client: <b>client_name</b></div>
+        <button class="drop" id="lhDropB" type="button"><strong>Choose file</strong> or drop it here</button>
+        <input type="file" id="lhFileB" accept=".csv,.xlsx,.txt,.tsv" hidden>
+        <div class="fileinfo" id="lhInfoB"></div>
+        <div class="err" id="lhErrB"></div>
+      </div>
+      <p class="hint" style="margin-top:8px">The selected option feeds LH Intransit results and Lane totals. Uploading a file selects its option.</p>
     </section>
   </div>
 
@@ -242,13 +259,13 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <div class="kpis">
       <div class="kpi"><div class="l">LH Intransit rows</div><div class="v" id="lhRows">0</div></div>
       <div class="kpi"><div class="l">Next Loc from route mapping</div><div class="v" id="lhHit">0</div></div>
-      <div class="kpi" id="lhFallBox"><div class="l">Fallback to Shipment_Destination_dc</div><div class="v" id="lhFall">0</div></div>
+      <div class="kpi" id="lhFallBox"><div class="l" id="lhFallLbl">Fallback to Shipment_Destination_dc</div><div class="v" id="lhFall">0</div></div>
       <div class="kpi"><div class="l">Distinct Next Loc</div><div class="v" id="lhNextN">0</div></div>
       <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="lhVol">0</div></div>
     </div>
     <section class="panel">
       <div class="sectionhead">
-        <h2 style="margin:0">LH Intransit by Next Loc</h2>
+        <h2 style="margin:0">LH Intransit by Next Loc <span class="muted" id="lhSrcNote" style="font-weight:400;font-size:13px"></span></h2>
         <div class="row">
           <input type="text" id="lhSearch" placeholder="Search…" style="width:140px">
           <button class="btn primary" id="lhExport">Download LH Intransit + OD Pair, Next Loc</button>
@@ -936,23 +953,36 @@ wireDrop('rmDrop','rmFile',handleRMFile);
    Next Loc = route mapping "Next Location" for that OD Pair, else Shipment_Destination_dc
    Columns are found by header name, so column order can change. */
 const findCol=(headers,name)=>headers.findIndex(h=>String(h).trim().toLowerCase()===name.toLowerCase());
-async function handleLHFile(file){
-  $('lhErr').textContent=''; $('lhInfo').textContent='Reading '+file.name+'…';
+/* Two LH Intransit sources share all logic; only the destination and client columns differ. */
+const LH_SRC={
+  A:{label:'Option A: Ecom DC Floor Pendency', dest:'Shipment_Destination_dc', client:'Client', info:'lhInfo', err:'lhErr'},
+  B:{label:'Option B: LH Incoming Vehicle Visibility Dashboard', dest:'Shipment_Final_Destination_dc', client:'client_name', info:'lhInfoB', err:'lhErrB'}
+};
+state.lhSets={}; state.lhKey='A';
+function useLH(key){
+  state.lhKey=key; state.lh=state.lhSets[key]||null;
+  document.querySelectorAll('input[name="lhSrc"]').forEach(r=>{ r.checked=(r.value===key); });
+  if(state.lh) computeLH(); else { $('lhResults').classList.add('hidden'); renderLaneView(); }
+}
+async function handleLHFile(file,key){
+  key=key||'A'; const S=LH_SRC[key];
+  $(S.err).textContent=''; $(S.info).textContent='Reading '+file.name+'…';
   try{
     const rows=await readFile(file);
     if(rows.length<2) throw new Error('No data rows found under the header.');
     const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
-    if(findCol(headers,'Shipment_Destination_dc')<0) throw new Error('Could not find the "Shipment_Destination_dc" column in this file.');
+    if(findCol(headers,S.dest)<0) throw new Error('Could not find the "'+S.dest+'" column in this file.');
     const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
-    state.lh={name:file.name,headers,rows:body};
-    $('lhInfo').innerHTML='<b>'+esc(file.name)+'</b> · '+fmt(body.length,0)+' rows · '+width+' columns';
-    computeLH();
-  }catch(e){ $('lhInfo').textContent=''; $('lhErr').textContent=e.message; }
+    state.lhSets[key]={name:file.name,headers,rows:body,key};
+    $(S.info).innerHTML='<b>'+esc(file.name)+'</b> · '+fmt(body.length,0)+' rows · '+width+' columns'+(findCol(headers,S.client)<0?' · <span class="tag def">no '+esc(S.client)+' column, coefficient 1 used</span>':'');
+    useLH(key);
+  }catch(e){ $(S.info).textContent=''; $(S.err).textContent=e.message; }
 }
 function hubDisplay(){ return HUBS.find(h=>normTM(h)===state.planOrigin)||''; }
 function computeLH(){
   const L=state.lh; if(!L){ $('lhResults').classList.add('hidden'); return; }
-  const di=findCol(L.headers,'Shipment_Destination_dc'); const hub=hubDisplay();
+  const S=LH_SRC[L.key||'A'];
+  const di=findCol(L.headers,S.dest); const hub=hubDisplay();
   const od=new Array(L.rows.length), next=new Array(L.rows.length), src=new Array(L.rows.length);
   let hit=0, fall=0;
   for(let i=0;i<L.rows.length;i++){
@@ -963,7 +993,7 @@ function computeLH(){
     else { next[i]=dest; src[i]=dest?'fallback':''; if(dest) fall++; }
   }
   L.od=od; L.next=next; L.src=src;
-  const ciL=findCol(L.headers,'Client');
+  const ciL=findCol(L.headers,S.client);
   L.coef=new Array(L.rows.length); L.res=new Array(L.rows.length);
   for(let i=0;i<L.rows.length;i++){
     L.coef[i]=coeffFor(ciL>=0?L.rows[i][ciL]:'');
@@ -973,9 +1003,10 @@ function computeLH(){
   $('lhRows').textContent=fmt(L.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
   $('lhFallBox').classList.toggle('warn',fall>0);
   let note='';
-  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses Shipment_Destination_dc.';
-  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses Shipment_Destination_dc.';
-  else note='OD Pair = '+hub+'-Shipment_Destination_dc. Next Loc comes from the route mapping where the OD Pair matches, otherwise Shipment_Destination_dc.';
+  $('lhFallLbl').textContent='Fallback to '+S.dest; $('lhSrcNote').textContent='· '+S.label;
+  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses '+S.dest+'.';
+  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses '+S.dest+'.';
+  else note='OD Pair = '+hub+'-'+S.dest+'. Next Loc comes from the route mapping where the OD Pair matches, otherwise '+S.dest+'.';
   $('lhNote').textContent=note;
   renderLHSummary(); renderLHLanes(); renderLHPreview(); renderLaneView();
 }
@@ -1067,7 +1098,7 @@ $('laneExport').onclick=()=>{
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
-  const L=state.lh; const want=['Awb_number','Client','MM_destination','Shipment_Destination_dc','Delivery_hub'];
+  const L=state.lh; const S=LH_SRC[L.key||'A']; const want=['Awb_number',S.client,'MM_destination',S.dest,'Delivery_hub'];
   const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
   const N=Math.min(200,L.rows.length);
   $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+6)+' columns';
@@ -1088,7 +1119,7 @@ $('lhExport').onclick=()=>{
     const rs=L.res[i], c=L.coef[i];
     lines.push(L.rows[i].concat([L.od[i],L.next[i],c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
   }
-  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+  download(L.name.replace(/\.[^.]+$/,'')+'_option'+(L.key||'A')+'_with_lanes_'+stamp()+'.csv',lines);
 };
 $('lhLaneExport').onclick=()=>{
   const L=state.lh; if(!L) return;
@@ -1096,9 +1127,11 @@ $('lhLaneExport').onclick=()=>{
   for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.next[i])); lanes.set(rs.lane,e); }
   const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
   [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
-  download('lh_intransit_lanes_'+stamp()+'.csv',lines);
+  download('lh_intransit_option'+(L.key||'A')+'_lanes_'+stamp()+'.csv',lines);
 };
-wireDrop('lhDrop','lhFile',handleLHFile);
+wireDrop('lhDrop','lhFile',f=>handleLHFile(f,'A'));
+wireDrop('lhDropB','lhFileB',f=>handleLHFile(f,'B'));
+document.querySelectorAll('input[name="lhSrc"]').forEach(r=>r.onchange=()=>{ if(r.checked) useLH(r.value); });
 try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; localStorage.removeItem('volumetricPlanner.hm.v1'); }catch(e){}
 loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
 })();
