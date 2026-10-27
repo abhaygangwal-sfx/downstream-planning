@@ -162,6 +162,19 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <div class="err" id="lhErr"></div>
   </section>
 
+  <section class="panel hidden" id="laneView">
+    <div class="sectionhead">
+      <div>
+        <h2 style="margin:0">Lane totals</h2>
+        <p class="hint" style="margin:4px 0 0" id="laneNote"></p>
+      </div>
+      <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
+    </div>
+    <div class="tablewrap" style="max-height:560px">
+      <table><thead><tr><th>Row Labels</th><th class="num">Sum of FWD floor</th><th class="num">Sum of LH intransit</th><th class="num">Sum of Vol coeff</th></tr></thead><tbody id="laneBody"></tbody></table>
+    </div>
+  </section>
+
   <div id="results" class="hidden">
     <div class="alert hidden" id="missingBox">
       <h3 id="missingTitle"></h3>
@@ -580,6 +593,7 @@ function recompute(){
   renderSummary();
   renderReview();
   renderPreview();
+  renderLaneView();
 }
 
 function renderMissing(missing){
@@ -950,7 +964,7 @@ function computeLH(){
   else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses Shipment_Destination_dc.';
   else note='OD Pair = '+hub+'-Shipment_Destination_dc. Next Loc comes from the route mapping where the OD Pair matches, otherwise Shipment_Destination_dc.';
   $('lhNote').textContent=note;
-  renderLHSummary(); renderLHLanes(); renderLHPreview();
+  renderLHSummary(); renderLHLanes(); renderLHPreview(); renderLaneView();
 }
 function renderLHSummary(){
   const L=state.lh, g=new Map();
@@ -981,6 +995,47 @@ function renderLHLanes(){
   $('lhLaneNote').textContent = (hasLanes ? '' : 'Upload the transportation master to see lanes. ')
     + 'Each row adds its Client coefficient (same rules as Floor pendency) to the lane of its Next Loc'+(state.planOrigin?' for the selected hub.':'.');
 }
+/* Lane totals: Floor pendency volumetric + LH Intransit volumetric per lane. */
+function laneTotals(){
+  const F=new Map(), H=new Map(); const ne={f:0,h:0,nf:0,nh:0};
+  const add=(map,k,v)=>{ const e=map.get(k)||{v:0}; e.v+=v; map.set(k,e); };
+  if(state.data && state.nlIdx>=0){
+    const {rows}=state.data;
+    for(let i=0;i<rows.length;i++){
+      const c=coeffFor(rows[i][state.clientIdx]).c??0;
+      const res=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:'');
+      if(res.status==='ne'){ ne.f+=c; ne.nf++; } else add(F,res.lane,c);
+    }
+  }
+  if(state.lh){
+    for(let i=0;i<state.lh.rows.length;i++){
+      const c=state.lh.coef[i].c??0, res=state.lh.res[i];
+      if(res.status==='ne'){ ne.h+=c; ne.nh++; } else add(H,res.lane,c);
+    }
+  }
+  const keys=[...new Set([...F.keys(),...H.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
+  const rows=keys.map(k=>({lane:k, f:(F.get(k)||{v:0}).v, h:(H.get(k)||{v:0}).v}));
+  return {rows, ne};
+}
+function renderLaneView(){
+  if(!state.data && !state.lh){ $('laneView').classList.add('hidden'); return; }
+  $('laneView').classList.remove('hidden');
+  const {rows,ne}=laneTotals();
+  const tf=rows.reduce((a,x)=>a+x.f,0), th=rows.reduce((a,x)=>a+x.h,0);
+  $('laneBody').innerHTML = rows.map(x=>'<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.f)+'</td><td class="num">'+fmt(x.h)+'</td><td class="num"><b>'+fmt(x.f+x.h)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(tf)+'</b></td><td class="num"><b>'+fmt(th)+'</b></td><td class="num"><b>'+fmt(tf+th)+'</b></td></tr>'
+    + ((ne.nf||ne.nh) ? '<tr class="muted"><td>Not eligible (not in lanes)</td><td class="num">'+fmt(ne.f)+'</td><td class="num">'+fmt(ne.h)+'</td><td class="num">'+fmt(ne.f+ne.h)+'</td></tr>' : '');
+  $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
+    + 'Volumetric uses client coefficients (default for unknown clients). Vol coeff = FWD floor + LH intransit.'
+    + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
+}
+$('laneExport').onclick=()=>{
+  const {rows,ne}=laneTotals();
+  const lines=['lane_code,sum_of_fwd_floor,sum_of_lh_intransit,sum_of_vol_coeff'];
+  rows.forEach(x=>lines.push([csvCell(disp(x.lane)),+x.f.toFixed(4),+x.h.toFixed(4),+(x.f+x.h).toFixed(4)].join(',')));
+  lines.push(['Not eligible',+ne.f.toFixed(4),+ne.h.toFixed(4),+(ne.f+ne.h).toFixed(4)].join(','));
+  download('lane_totals_'+stamp()+'.csv',lines);
+};
 function renderLHPreview(){
   const L=state.lh; const want=['Awb_number','Client','MM_destination','Shipment_Destination_dc','Delivery_hub'];
   const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
