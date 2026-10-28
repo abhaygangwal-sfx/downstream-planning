@@ -194,6 +194,15 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <div class="err" id="whErr"></div>
   </section>
 
+  <section class="panel" style="margin-top:16px">
+    <h2><span class="step">4</span> Fourth source</h2>
+    <p class="hint">Upload the export (CSV or Excel). Only rows where <b>origin_dc</b> = <b>origin_bagging_dc</b> are processed; other rows are excluded before any calculation. <b>client</b> is matched to your client coefficients. <b>Destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane.</p>
+    <button class="drop" id="foDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="foFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="foInfo"></div>
+    <div class="err" id="foErr"></div>
+  </section>
+
   <section class="panel hidden" id="laneView">
     <div class="sectionhead">
       <div>
@@ -203,7 +212,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol Fourth source</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -303,6 +312,34 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     <section class="panel">
       <div class="sectionhead"><h2 style="margin:0">LH Intransit preview <span class="muted" id="lhPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
       <div class="tablewrap"><table><thead id="lhPrevHead"></thead><tbody id="lhPrevBody"></tbody></table></div>
+    </section>
+  </div>
+  <div id="foResults" class="hidden">
+    <div class="kpis">
+      <div class="kpi"><div class="l">Fourth source rows</div><div class="v" id="foRows">0</div></div>
+      <div class="kpi" id="foMisBox"><div class="l">Excluded: origin_dc ≠ origin_bagging_dc</div><div class="v" id="foMis">0</div></div>
+      <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="foElig">0</div></div>
+      <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="foNE">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="foVol">0</div></div>
+    </div>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">Fourth source volumetric by lane</h2>
+        <div class="row"><button class="btn" id="foLaneExport">Download lane summary</button><button class="btn primary" id="foExport">Download with lanes</button></div>
+      </div>
+      <div class="muted" id="foNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Lane Code</th><th>Destinations included</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="foLaneBody"></tbody></table>
+      </div>
+      <h3 class="sub">Not eligible for planning <span class="muted" id="foNECount" style="font-weight:400"></span></h3>
+      <p class="hint">Destination_dc with no lane in the transportation master (or outside the selected hub's lanes). Not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:240px">
+        <table><thead><tr><th>Destination_dc</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="foNEBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead"><h2 style="margin:0">Fourth source preview <span class="muted" id="foPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="tablewrap"><table><thead id="foPrevHead"></thead><tbody id="foPrevBody"></tbody></table></div>
     </section>
   </div>
   <div id="whResults" class="hidden">
@@ -824,7 +861,7 @@ $('exportNE').onclick=()=>{
 };
 $('originSel').onchange=()=>{
   state.planOrigin=$('originSel').value; try{localStorage.setItem(ORIGIN_KEY,state.planOrigin);}catch(e){}
-  computeLH(); computeWH();
+  computeLH(); computeWH(); computeFO();
   if(!state.tm.size){ $('tmPanel').classList.remove('hidden'); $('tmErr').textContent='Upload the transportation master sheet to see lanes for this hub.'; return; }
   if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
 };
@@ -893,7 +930,7 @@ async function handleTMFile(file){
     fillOrigins(); saveTM(); showTMInfo();
     if(skipped) $('tmInfo').innerHTML+=' <span class="muted">· '+fmt(skipped,0)+' rows skipped (blank Destination or Lane Code)</span>';
     if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
-    computeLH(); computeWH(); renderLaneView();
+    computeLH(); computeWH(); computeFO(); renderLaneView();
   }catch(e){ showTMInfo(); $('tmErr').textContent=e.message+(state.tm.size?' Your previously saved master is still in use.':''); }
 }
 $('tmBtn').onclick=()=>$('tmPanel').classList.toggle('hidden');
@@ -951,7 +988,7 @@ function showRMInfo(){
   try{ const o=await kvGet('route'); if(o){
     state.rm=new Map(o.list||[]); state.rmName=o.name||'';
     state.rmOD=o.od ? new Map(o.od) : new Map([...state.rm.values()].map(v=>[normTM(v[2]+'-'+v[3]), v[0]]));
-    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH();
+    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH(); computeFO();
   } }catch(e){}
   showRMInfo();
 })();
@@ -978,7 +1015,7 @@ async function handleRMFile(file){
     if(!m.size) throw new Error('No origin and destination pairs found.');
     state.rm=m; state.rmOD=od; state.rmName=file.name;
     await kvSet('route',{name:file.name,list:[...m.entries()],od:[...od.entries()]});
-    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH();
+    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH(); computeFO();
   }catch(e){ showRMInfo(); $('rmErr').textContent=e.message+(state.rm.size?' Your previously saved mapping is still in use.':''); }
 }
 $('rmBtn').onclick=()=>$('rmPanel').classList.toggle('hidden');
@@ -1001,7 +1038,7 @@ function showLHInfo(key){
   $(S.info).innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
     +(findCol(L.headers,S.client)<0?' · <span class="tag def">no '+esc(S.client)+' column, coefficient 1 used</span>':'')
     +' · <button class="linkbtn" data-lhremove="'+key+'">Remove</button>';
-  $(S.info).querySelector('[data-lhremove]').onclick=()=>{ delete state.lhSets[key]; showLHInfo(key); computeLH(); computeWH(); };
+  $(S.info).querySelector('[data-lhremove]').onclick=()=>{ delete state.lhSets[key]; showLHInfo(key); computeLH(); computeWH(); computeFO(); };
 }
 async function handleLHFile(file,key){
   const S=LH_SRC[key];
@@ -1013,7 +1050,7 @@ async function handleLHFile(file,key){
     if(findCol(headers,S.dest)<0) throw new Error('Could not find the "'+S.dest+'" column in this file.');
     const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
     state.lhSets[key]={name:file.name,headers,rows:body,key};
-    showLHInfo(key); computeLH(); computeWH();
+    showLHInfo(key); computeLH(); computeWH(); computeFO();
   }catch(e){ showLHInfo(key); $(S.err).textContent=e.message+(state.lhSets[key]?' The previous file is still in use.':''); }
 }
 function hubDisplay(){ return HUBS.find(h=>normTM(h)===state.planOrigin)||''; }
@@ -1108,7 +1145,7 @@ function showWHInfo(){
   $('whInfo').innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
     +(findCol(L.headers,WH_CLIENT)<0?' · <span class="tag def">no client_name column, coefficient 1 used</span>':'')
     +' · <button class="linkbtn" id="whRemove">Remove</button>';
-  $('whRemove').onclick=()=>{ state.wh=null; $('whErr').textContent=''; showWHInfo(); computeWH(); };
+  $('whRemove').onclick=()=>{ state.wh=null; $('whErr').textContent=''; showWHInfo(); computeWH(); computeFO(); };
 }
 async function handleWHFile(file){
   $('whErr').textContent=''; $('whInfo').textContent='Reading '+file.name+'…';
@@ -1119,7 +1156,7 @@ async function handleWHFile(file){
     if(findCol(headers,WH_DEST)<0) throw new Error('Could not find the "'+WH_DEST+'" column in this file.');
     const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
     state.wh={name:file.name,headers,rows:body};
-    showWHInfo(); computeWH();
+    showWHInfo(); computeWH(); computeFO();
   }catch(e){ showWHInfo(); $('whErr').textContent=e.message+(state.wh?' The previous file is still in use.':''); }
 }
 function computeWH(){
@@ -1188,9 +1225,105 @@ $('whLaneExport').onclick=()=>{
   download('warehouse_pendency_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('whDrop','whFile',handleWHFile);
-/* Lane totals: per lane, the volumetric coefficients of floor, LH and warehouse rows are summed; AWB counts all three. */
+/* ---------- Fourth source ----------
+   Client = client (coefficient rules as Floor pendency).
+   Lane = Destination_dc matched to the transportation master "destination" column (same as Warehouse Pendency).
+   Only rows with origin_dc = origin_bagging_dc are processed; all other rows are excluded before any calculation. */
+const FO_LABEL='Fourth source', FO_DEST='Destination_dc', FO_CLIENT='client', FO_ORIG='origin_dc', FO_BAG='origin_bagging_dc';
+function showFOInfo(){
+  const L=state.fo;
+  if(!L){ $('foInfo').textContent=''; return; }
+  $('foInfo').innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
+    +(findCol(L.headers,FO_CLIENT)<0?' · <span class="tag def">no client column, coefficient 1 used</span>':'')
+    +' · <button class="linkbtn" id="foRemove">Remove</button>';
+  $('foRemove').onclick=()=>{ state.fo=null; $('foErr').textContent=''; showFOInfo(); computeFO(); };
+}
+async function handleFOFile(file){
+  $('foErr').textContent=''; $('foInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
+    [FO_DEST,FO_CLIENT,FO_ORIG,FO_BAG].forEach(c=>{ if(findCol(headers,c)<0) throw new Error('Could not find the "'+c+'" column in this file.'); });
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.fo={name:file.name,headers,rows:body};
+    showFOInfo(); computeFO();
+  }catch(e){ showFOInfo(); $('foErr').textContent=e.message+(state.fo?' The previous file is still in use.':''); }
+}
+function computeFO(){
+  const L=state.fo;
+  if(!L){ $('foResults').classList.add('hidden'); renderLaneView(); return; }
+  const hub=hubDisplay(), n=L.rows.length;
+  const di=findCol(L.headers,FO_DEST), ci=findCol(L.headers,FO_CLIENT), oi=findCol(L.headers,FO_ORIG), bi=findCol(L.headers,FO_BAG);
+  L.dest=new Array(n); L.coef=new Array(n); L.res=new Array(n);
+  let elig=0, neN=0, misN=0, vol=0;
+  for(let i=0;i<n;i++){
+    const d=String(L.rows[i][di]??'').trim();
+    L.dest[i]=d;
+    const o=normTM(L.rows[i][oi]), b=normTM(L.rows[i][bi]);
+    if(!o || o!==b){ L.res[i]={status:'mismatch'}; L.coef[i]={c:null,src:'excluded'}; misN++; continue; }
+    L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
+    L.res[i]=resolveLane(d,'');
+    if(L.res[i].status==='ne') neN++; else { elig++; if(L.coef[i].c!=null) vol+=L.coef[i].c; }
+  }
+  $('foResults').classList.remove('hidden');
+  $('foRows').textContent=fmt(n,0); $('foElig').textContent=fmt(elig,0); $('foNE').textContent=fmt(neN,0); $('foMis').textContent=fmt(misN,0); $('foVol').textContent=fmt(vol);
+  $('foMisBox').classList.toggle('warn',misN>0);
+  $('foNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top to limit lanes to that hub. ')
+    +'Only rows where origin_dc = origin_bagging_dc are processed. Lane = Destination_dc matched to the transportation master "destination" column. Client coefficient from client.';
+  renderFOLanes(); renderFOPreview(); renderLaneView();
+}
+function renderFOLanes(){
+  const L=state.fo, lanes=new Map(), ne=new Map();
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i]; if(rs.status==='mismatch') continue;
+    const v=L.coef[i].c, d=L.dest[i]||'(blank)';
+    if(rs.status==='ne'){ const e=ne.get(normTM(d))||{name:d,n:0,vol:0}; e.n++; if(v!=null) e.vol+=v; ne.set(normTM(d),e); continue; }
+    const e=lanes.get(rs.lane)||{n:0,vol:0,dests:new Map()}; e.n++; if(v!=null) e.vol+=v;
+    if(!e.dests.has(normTM(d))) e.dests.set(normTM(d), disp(d)); lanes.set(rs.lane,e);
+  }
+  const list=[...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol);
+  $('foLaneBody').innerHTML = list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="wrapcell">'+esc([...e.dests.values()].sort().join(', '))+'</td><td class="num">'+fmt(e.n,0)+'</td><td class="num"><b>'+fmt(e.vol)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].vol,0))+'</b></td></tr>';
+  const neL=[...ne.values()].sort((a,b)=>b.n-a.n);
+  $('foNEBody').innerHTML = neL.length ? neL.map(x=>'<tr><td>'+esc(disp(x.name))+'</td><td class="num">'+fmt(x.n,0)+'</td><td class="num">'+fmt(x.vol)+'</td></tr>').join('') : '<tr><td colspan="3" class="muted">None.</td></tr>';
+  $('foNECount').textContent='· '+fmt(neL.reduce((a,x)=>a+x.n,0),0)+' rows';
+}
+function renderFOPreview(){
+  const L=state.fo; const want=['Awb_number',FO_CLIENT,FO_DEST,FO_ORIG,FO_BAG];
+  const cols=[...new Set(want.map(w=>findCol(L.headers,w)).filter(i=>i>=0))];
+  const N=Math.min(200,L.rows.length);
+  $('foPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+3)+' columns';
+  $('foPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th class="num">volumetric_coeff</th><th>Lane Code</th><th>Status</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++){
+    const rs=L.res[r], c=L.coef[r];
+    const st = rs.status==='mismatch' ? '<span class="tag miss">origin mismatch</span>' : rs.status==='ne' ? '<span class="tag miss">not eligible</span>' : '<span class="tag ok">eligible</span>';
+    html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ok'||rs.status==='hub'?esc(rs.lane):'–')+'</td><td>'+st+'</td></tr>';
+  }
+  $('foPrevBody').innerHTML=html;
+}
+$('foExport').onclick=()=>{
+  const L=state.fo; if(!L) return;
+  const lines=[L.headers.concat(['volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], c=L.coef[i];
+    lines.push(L.rows[i].concat([c.c==null?'':c.c,c.src,rs.status==='ok'||rs.status==='hub'?rs.lane:'',rs.status==='mismatch'?'origin mismatch':rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+  }
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+};
+$('foLaneExport').onclick=()=>{
+  const L=state.fo; if(!L) return;
+  const lanes=new Map();
+  for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne'||rs.status==='mismatch') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.dest[i])); lanes.set(rs.lane,e); }
+  const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
+  download('fourth_source_lanes_'+stamp()+'.csv',lines);
+};
+wireDrop('foDrop','foFile',handleFOFile);
+/* Lane totals: per lane, the volumetric coefficients of all four sources are summed; AWB counts all four. */
 function laneTotals(){
-  const F=new Map(), H=new Map(), W=new Map();
+  const F=new Map(), H=new Map(), W=new Map(), X=new Map();
   const add=(map,k,v)=>{ const e=map.get(k)||{n:0,v:0}; e.n++; if(v!=null) e.v+=v; map.set(k,e); };
   if(state.data && state.nlIdx>=0){
     const {rows}=state.data;
@@ -1211,9 +1344,15 @@ function laneTotals(){
       if(res.status!=='ne') add(W,res.lane,state.wh.coef[i].c);
     }
   }
-  const keys=[...new Set([...F.keys(),...H.keys(),...W.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
-  return keys.map(k=>{ const f=F.get(k)||{n:0,v:0}, h=H.get(k)||{n:0,v:0}, w=W.get(k)||{n:0,v:0};
-    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v, wn:w.n, wv:w.v}; });
+  if(state.fo && state.fo.res){
+    for(let i=0;i<state.fo.rows.length;i++){
+      const res=state.fo.res[i];
+      if(res.status!=='ne' && res.status!=='mismatch') add(X,res.lane,state.fo.coef[i].c);
+    }
+  }
+  const keys=[...new Set([...F.keys(),...H.keys(),...W.keys(),...X.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
+  return keys.map(k=>{ const f=F.get(k)||{n:0,v:0}, h=H.get(k)||{n:0,v:0}, w=W.get(k)||{n:0,v:0}, x=X.get(k)||{n:0,v:0};
+    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v, wn:w.n, wv:w.v, xn:x.n, xv:x.v}; });
 }
 /* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
 function laneCapacity(lane){
@@ -1223,12 +1362,12 @@ function laneCapacity(lane){
   return {fleet:f.fleet, multi:f.multi, all:f.all, capacity: v ? v.capacity : null};
 }
 function renderLaneView(){
-  if(!state.data && !state.lh && !state.wh){ $('laneView').classList.add('hidden'); return; }
+  if(!state.data && !state.lh && !state.wh && !state.fo){ $('laneView').classList.add('hidden'); return; }
   $('laneView').classList.remove('hidden');
   const rows=laneTotals();
   const sum=k=>rows.reduce((a,x)=>a+x[k],0);
   $('laneBody').innerHTML = rows.map(x=>{
-    const cap=laneCapacity(x.lane), tc=x.fn+x.hn+x.wn, tv=x.fv+x.hv+x.wv;
+    const cap=laneCapacity(x.lane), tc=x.fn+x.hn+x.wn+x.xn, tv=x.fv+x.hv+x.wv+x.xv;
     let fleetCell, capCell, spillCell;
     if(!cap.fleet){ fleetCell='<span class="tag miss">'+(state.tmFleet.size?'no fleet type':'re-upload master')+'</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
     else {
@@ -1236,20 +1375,20 @@ function renderLaneView(){
       if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
       else { const sp=tv-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp)+'</td>'; }
     }
-    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num">'+fmt(x.wv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num">'+fmt(x.wv)+'</td><td class="num">'+fmt(x.xv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
   }).join('')
-    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('wv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn')+sum('wn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv')+sum('wv'))+'</b></td><td></td><td></td><td></td></tr>';
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('wv'))+'</b></td><td class="num"><b>'+fmt(sum('xv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn')+sum('wn')+sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv')+sum('wv')+sum('xv'))+'</b></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
-    + 'Total AWB = number of shipments per lane (floor + LH + warehouse). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = Sum of vol of FWD floor + Sum of vol LH intransit + Sum of vol Warehouse pendency. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
+    + 'Total AWB = number of shipments per lane (all sources). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = sum of all Sum of vol columns. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
     + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
     + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
 $('laneExport').onclick=()=>{
   const rows=laneTotals();
-  const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
-  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv;
-    lines.push([csvCell(disp(x.lane)),+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),x.fn+x.hn+x.wn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
+  const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fourth_source,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
+  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv;
+    lines.push([csvCell(disp(x.lane)),+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
