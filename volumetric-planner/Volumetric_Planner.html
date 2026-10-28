@@ -317,7 +317,6 @@ h3.sub{font-size:14px;margin:18px 0 4px}
   <div id="foResults" class="hidden">
     <div class="kpis">
       <div class="kpi"><div class="l">FM Load rows</div><div class="v" id="foRows">0</div></div>
-      <div class="kpi" id="foMisBox"><div class="l" id="foMisLbl">Excluded: origin_dc or origin_bagging_dc ≠ selected hub</div><div class="v" id="foMis">0</div></div>
       <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="foElig">0</div></div>
       <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="foNE">0</div></div>
       <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="foVol">0</div></div>
@@ -1267,9 +1266,7 @@ function computeFO(){
     if(L.res[i].status==='ne') neN++; else { elig++; if(L.coef[i].c!=null) vol+=L.coef[i].c; }
   }
   $('foResults').classList.remove('hidden');
-  $('foRows').textContent=fmt(n,0); $('foElig').textContent=fmt(elig,0); $('foNE').textContent=fmt(neN,0); $('foMis').textContent=fmt(misN,0); $('foVol').textContent=fmt(vol);
-  $('foMisBox').classList.toggle('warn',misN>0);
-  $('foMisLbl').textContent='Excluded: origin_dc or origin_bagging_dc ≠ selected hub';
+  $('foRows').textContent=fmt(n,0); $('foElig').textContent=fmt(elig,0); $('foNE').textContent=fmt(neN,0); $('foVol').textContent=fmt(vol);
   $('foNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top. Until then, no rows are processed. ')
     +'Only rows where origin_dc = origin_bagging_dc = the selected origin hub are processed. Lane = Destination_dc matched to the transportation master "destination" column. Client coefficient from client.';
   renderFOLanes(); renderFOPreview(); renderLaneView();
