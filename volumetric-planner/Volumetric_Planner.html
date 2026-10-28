@@ -209,7 +209,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
         <h2 style="margin:0">Lane totals</h2>
         <p class="hint" style="margin:4px 0 0" id="laneNote"></p>
       </div>
-      <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
+      <div class="row"><label class="inline" style="font-size:13px"><input type="checkbox" id="dedupeChk" checked> Remove duplicate AWBs across all sources</label><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
       <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol FM load</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
@@ -1319,33 +1319,62 @@ $('foLaneExport').onclick=()=>{
   download('fm_load_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('foDrop','foFile',handleFOFile);
+/* Duplicate AWB removal across sources. Only rows that would be counted in a lane are considered.
+   Order of priority: Floor pendency > LH Intransit > Warehouse Pendency > FM Load; the first occurrence is kept. */
+const normAwb=v=>String(v==null?'':v).trim().toUpperCase().replace(/\s+/g,'');
+const findAwbIdx=h=>{ for(const c of ['awb_number','awb','awb no','awb_no']){ const i=findCol(h,c); if(i>=0) return i; } return -1; };
+function dupMasks(){
+  const seen=new Set(), out={F:[],H:[],W:[],X:[]}, cnt={F:0,H:0,W:0,X:0};
+  const srcs=[];
+  if(state.data && state.nlIdx>=0){
+    const {rows,headers}=state.data, ai=findAwbIdx(headers);
+    srcs.push(['F', rows.length, i=>{ const r=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:''); return r.status!=='ne' ? rows[i][ai] : null; }]);
+  }
+  if(state.lh){ const ai=findAwbIdx(state.lh.headers); srcs.push(['H', state.lh.rows.length, i=>state.lh.res[i].status!=='ne' ? state.lh.rows[i][ai] : null]); }
+  if(state.wh && state.wh.res){ const ai=findAwbIdx(state.wh.headers); srcs.push(['W', state.wh.rows.length, i=>state.wh.res[i].status!=='ne' ? state.wh.rows[i][ai] : null]); }
+  if(state.fo && state.fo.res){ const ai=findAwbIdx(state.fo.headers); srcs.push(['X', state.fo.rows.length, i=>(state.fo.res[i].status!=='ne' && state.fo.res[i].status!=='mismatch') ? state.fo.rows[i][ai] : null]); }
+  for(const [k,n,get] of srcs){
+    out[k]=new Array(n).fill(false);
+    for(let i=0;i<n;i++){
+      const v=get(i); if(v==null) continue;
+      const key=normAwb(v); if(!key) continue;
+      if(seen.has(key)){ out[k][i]=true; cnt[k]++; } else seen.add(key);
+    }
+  }
+  return {out, cnt};
+}
 /* Lane totals: per lane, the volumetric coefficients of all four sources are summed; AWB counts all four.
    FM Load: only 80% of each lane's summed volume is counted; the other 20% is removed. */
 const FM_LANE_SHARE=0.8;
 function laneTotals(){
   const F=new Map(), H=new Map(), W=new Map(), X=new Map();
+  const M=$('dedupeChk').checked ? dupMasks() : null; const dm=M?M.out:{F:[],H:[],W:[],X:[]}; state.dupCnt=M?M.cnt:{F:0,H:0,W:0,X:0};
   const add=(map,k,v)=>{ const e=map.get(k)||{n:0,v:0}; e.n++; if(v!=null) e.v+=v; map.set(k,e); };
   if(state.data && state.nlIdx>=0){
     const {rows}=state.data;
     for(let i=0;i<rows.length;i++){
+      if(dm.F[i]) continue;
       const res=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:'');
       if(res.status!=='ne') add(F,res.lane,coeffFor(rows[i][state.clientIdx]).c);
     }
   }
   if(state.lh){
     for(let i=0;i<state.lh.rows.length;i++){
+      if(dm.H[i]) continue;
       const res=state.lh.res[i];
       if(res.status!=='ne') add(H,res.lane,state.lh.coef[i].c);
     }
   }
   if(state.wh && state.wh.res){
     for(let i=0;i<state.wh.rows.length;i++){
+      if(dm.W[i]) continue;
       const res=state.wh.res[i];
       if(res.status!=='ne') add(W,res.lane,state.wh.coef[i].c);
     }
   }
   if(state.fo && state.fo.res){
     for(let i=0;i<state.fo.rows.length;i++){
+      if(dm.X[i]) continue;
       const res=state.fo.res[i];
       if(res.status!=='ne' && res.status!=='mismatch') add(X,res.lane,state.fo.coef[i].c);
     }
@@ -1382,8 +1411,10 @@ function renderLaneView(){
     + 'Total AWB = number of shipments per lane (all sources). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = sum of all Sum of vol columns. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
     + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
     + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
-    + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
+    + (state.tm.size ? '' : ' Upload the transportation master to see lanes.')
+    + (state.dupCnt && $('dedupeChk').checked ? ' Duplicates removed (first occurrence kept, in order Floor, LH, Warehouse, FM Load): Floor '+fmt(state.dupCnt.F,0)+', LH '+fmt(state.dupCnt.H,0)+', Warehouse '+fmt(state.dupCnt.W,0)+', FM Load '+fmt(state.dupCnt.X,0)+'.' : '');
 }
+$('dedupeChk').onchange=()=>renderLaneView();
 $('laneExport').onclick=()=>{
   const rows=laneTotals();
   const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fm_load,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
