@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Volumetric Planner</title>
+<title>Downstream Planning</title>
 <style>
 :root{
   --bg:#f6f5f2; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6a65; --line:#e3e1db;
@@ -97,7 +97,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 <div id="pageMain">
   <header>
     <div>
-      <h1>Volumetric Planner</h1>
+      <h1>Downstream Planning</h1>
       <p class="sub">Apply client coefficients to shipment data and see volumetric load by client, hub or route.</p>
     </div>
     <div class="row"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="ccBtn">Client coefficients sheet</button><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><button class="btn" id="vcBtn">Vehicle capacity sheet</button><span class="badge">● Works offline · data never leaves this computer</span></div>
@@ -591,9 +591,15 @@ async function handleDataFile(file){
     const nl = lower.indexOf('next_location'); state.nlIdx = nl; state.locIdx = lower.indexOf('location_name');
     state.groupIdx = (nl>=0 && state.tm.size) ? -1 : (nl>=0 ? nl : state.clientIdx);
     fillSelects();
-    $('dataInfo').innerHTML='<b>'+esc(file.name)+'</b> · '+fmt(body.length,0)+' rows · '+width+' columns';
+    showDataInfo();
     recompute();
-  }catch(e){ $('dataInfo').textContent=''; $('dataErr').textContent=e.message; }
+  }catch(e){ showDataInfo(); $('dataErr').textContent=e.message+(state.data?' The previous file is still in use.':''); }
+}
+function showDataInfo(){
+  const D=state.data;
+  if(!D){ $('dataInfo').textContent=''; return; }
+  $('dataInfo').innerHTML='<b>'+esc(D.name)+'</b> · '+fmt(D.rows.length,0)+' rows · '+D.headers.length+' columns · <button class="linkbtn" id="dataRemove">Remove</button>';
+  $('dataRemove').onclick=()=>{ state.data=null; $('dataErr').textContent=''; showDataInfo(); recompute(); renderLaneView(); };
 }
 
 function fillSelects(){
