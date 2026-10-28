@@ -194,7 +194,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">Count of FWD floor</th><th class="num">Sum of vol of FWD floor</th><th class="num">Count of LH intransit</th><th class="num">Sum of vol LH intransit</th><th class="num">total Count of Vol coeff</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -1103,20 +1103,20 @@ function renderLaneView(){
       if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
       else { const sp=tv-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp)+'</td>'; }
     }
-    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fn,0)+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hn,0)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
   }).join('')
-    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv'))+'</b></td><td></td><td></td><td></td></tr>';
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv'))+'</b></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
-    + 'Count = number of shipments per lane. Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = Sum of vol of FWD floor + Sum of vol LH intransit. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
+    + 'Total AWB = number of shipments per lane (floor + LH). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = Sum of vol of FWD floor + Sum of vol LH intransit. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
     + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
     + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
     + (state.tm.size ? '' : ' Upload the transportation master to see lanes.');
 }
 $('laneExport').onclick=()=>{
   const rows=laneTotals();
-  const lines=['lane_code,count_of_fwd_floor,sum_of_vol_fwd_floor,count_of_lh_intransit,sum_of_vol_lh_intransit,total_count_of_vol_coeff,total_volumetric,fleet_type,vehicle_capacity,spillover'];
+  const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
   rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv;
-    lines.push([csvCell(disp(x.lane)),x.fn,+x.fv.toFixed(4),x.hn,+x.hv.toFixed(4),x.fn+x.hn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
+    lines.push([csvCell(disp(x.lane)),+x.fv.toFixed(4),+x.hv.toFixed(4),x.fn+x.hn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
