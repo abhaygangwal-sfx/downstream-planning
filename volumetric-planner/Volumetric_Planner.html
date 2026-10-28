@@ -196,7 +196,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
 
   <section class="panel" style="margin-top:16px">
     <h2><span class="step">4</span> Fourth source</h2>
-    <p class="hint">Upload the export (CSV or Excel). Only rows where <b>origin_dc</b> = <b>origin_bagging_dc</b> are processed; other rows are excluded before any calculation. <b>client</b> is matched to your client coefficients. <b>Destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane.</p>
+    <p class="hint">Upload the export (CSV or Excel). Only rows where <b>origin_dc</b> and <b>origin_bagging_dc</b> both equal the <b>selected Origin hub</b> are processed; other rows are excluded before any calculation. <b>client</b> is matched to your client coefficients. <b>Destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane.</p>
     <button class="drop" id="foDrop" type="button"><strong>Choose file</strong> or drop it here</button>
     <input type="file" id="foFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
     <div class="fileinfo" id="foInfo"></div>
@@ -317,7 +317,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
   <div id="foResults" class="hidden">
     <div class="kpis">
       <div class="kpi"><div class="l">Fourth source rows</div><div class="v" id="foRows">0</div></div>
-      <div class="kpi" id="foMisBox"><div class="l">Excluded: origin_dc ≠ origin_bagging_dc</div><div class="v" id="foMis">0</div></div>
+      <div class="kpi" id="foMisBox"><div class="l" id="foMisLbl">Excluded: origin_dc or origin_bagging_dc ≠ selected hub</div><div class="v" id="foMis">0</div></div>
       <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="foElig">0</div></div>
       <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="foNE">0</div></div>
       <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="foVol">0</div></div>
@@ -1261,7 +1261,7 @@ function computeFO(){
     const d=String(L.rows[i][di]??'').trim();
     L.dest[i]=d;
     const o=normTM(L.rows[i][oi]), b=normTM(L.rows[i][bi]);
-    if(!o || o!==b){ L.res[i]={status:'mismatch'}; L.coef[i]={c:null,src:'excluded'}; misN++; continue; }
+    if(!state.planOrigin || o!==state.planOrigin || b!==state.planOrigin){ L.res[i]={status:'mismatch'}; L.coef[i]={c:null,src:'excluded'}; misN++; continue; }
     L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
     L.res[i]=resolveLane(d,'');
     if(L.res[i].status==='ne') neN++; else { elig++; if(L.coef[i].c!=null) vol+=L.coef[i].c; }
@@ -1269,8 +1269,9 @@ function computeFO(){
   $('foResults').classList.remove('hidden');
   $('foRows').textContent=fmt(n,0); $('foElig').textContent=fmt(elig,0); $('foNE').textContent=fmt(neN,0); $('foMis').textContent=fmt(misN,0); $('foVol').textContent=fmt(vol);
   $('foMisBox').classList.toggle('warn',misN>0);
-  $('foNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top to limit lanes to that hub. ')
-    +'Only rows where origin_dc = origin_bagging_dc are processed. Lane = Destination_dc matched to the transportation master "destination" column. Client coefficient from client.';
+  $('foMisLbl').textContent='Excluded: origin_dc or origin_bagging_dc ≠ selected hub';
+  $('foNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top. Until then, no rows are processed. ')
+    +'Only rows where origin_dc = origin_bagging_dc = the selected origin hub are processed. Lane = Destination_dc matched to the transportation master "destination" column. Client coefficient from client.';
   renderFOLanes(); renderFOPreview(); renderLaneView();
 }
 function renderFOLanes(){
