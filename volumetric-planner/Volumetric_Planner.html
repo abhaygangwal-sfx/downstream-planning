@@ -195,7 +195,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
   </section>
 
   <section class="panel" style="margin-top:16px">
-    <h2><span class="step">4</span> Fourth source</h2>
+    <h2><span class="step">4</span> FM Load</h2>
     <p class="hint">Upload the export (CSV or Excel). Only rows where <b>origin_dc</b> and <b>origin_bagging_dc</b> both equal the <b>selected Origin hub</b> are processed; other rows are excluded before any calculation. <b>client</b> is matched to your client coefficients. <b>Destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane.</p>
     <button class="drop" id="foDrop" type="button"><strong>Choose file</strong> or drop it here</button>
     <input type="file" id="foFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
@@ -212,7 +212,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol Fourth source</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol FM load</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -316,7 +316,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
   </div>
   <div id="foResults" class="hidden">
     <div class="kpis">
-      <div class="kpi"><div class="l">Fourth source rows</div><div class="v" id="foRows">0</div></div>
+      <div class="kpi"><div class="l">FM Load rows</div><div class="v" id="foRows">0</div></div>
       <div class="kpi" id="foMisBox"><div class="l" id="foMisLbl">Excluded: origin_dc or origin_bagging_dc ≠ selected hub</div><div class="v" id="foMis">0</div></div>
       <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="foElig">0</div></div>
       <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="foNE">0</div></div>
@@ -324,7 +324,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
     </div>
     <section class="panel">
       <div class="sectionhead">
-        <h2 style="margin:0">Fourth source volumetric by lane</h2>
+        <h2 style="margin:0">FM Load volumetric by lane</h2>
         <div class="row"><button class="btn" id="foLaneExport">Download lane summary</button><button class="btn primary" id="foExport">Download with lanes</button></div>
       </div>
       <div class="muted" id="foNote" style="font-size:13px;margin-bottom:8px"></div>
@@ -338,7 +338,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       </div>
     </section>
     <section class="panel">
-      <div class="sectionhead"><h2 style="margin:0">Fourth source preview <span class="muted" id="foPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="sectionhead"><h2 style="margin:0">FM Load preview <span class="muted" id="foPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
       <div class="tablewrap"><table><thead id="foPrevHead"></thead><tbody id="foPrevBody"></tbody></table></div>
     </section>
   </div>
@@ -1225,11 +1225,11 @@ $('whLaneExport').onclick=()=>{
   download('warehouse_pendency_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('whDrop','whFile',handleWHFile);
-/* ---------- Fourth source ----------
+/* ---------- FM Load ----------
    Client = client (coefficient rules as Floor pendency).
    Lane = Destination_dc matched to the transportation master "destination" column (same as Warehouse Pendency).
    Only rows with origin_dc = origin_bagging_dc are processed; all other rows are excluded before any calculation. */
-const FO_LABEL='Fourth source', FO_DEST='Destination_dc', FO_CLIENT='client', FO_ORIG='origin_dc', FO_BAG='origin_bagging_dc';
+const FO_LABEL='FM Load', FO_DEST='Destination_dc', FO_CLIENT='client', FO_ORIG='origin_dc', FO_BAG='origin_bagging_dc';
 function showFOInfo(){
   const L=state.fo;
   if(!L){ $('foInfo').textContent=''; return; }
@@ -1319,10 +1319,12 @@ $('foLaneExport').onclick=()=>{
   for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne'||rs.status==='mismatch') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.dest[i])); lanes.set(rs.lane,e); }
   const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
   [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
-  download('fourth_source_lanes_'+stamp()+'.csv',lines);
+  download('fm_load_lanes_'+stamp()+'.csv',lines);
 };
 wireDrop('foDrop','foFile',handleFOFile);
-/* Lane totals: per lane, the volumetric coefficients of all four sources are summed; AWB counts all four. */
+/* Lane totals: per lane, the volumetric coefficients of all four sources are summed; AWB counts all four.
+   FM Load: only 80% of each lane's summed volume is counted; the other 20% is removed. */
+const FM_LANE_SHARE=0.8;
 function laneTotals(){
   const F=new Map(), H=new Map(), W=new Map(), X=new Map();
   const add=(map,k,v)=>{ const e=map.get(k)||{n:0,v:0}; e.n++; if(v!=null) e.v+=v; map.set(k,e); };
@@ -1353,7 +1355,7 @@ function laneTotals(){
   }
   const keys=[...new Set([...F.keys(),...H.keys(),...W.keys(),...X.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
   return keys.map(k=>{ const f=F.get(k)||{n:0,v:0}, h=H.get(k)||{n:0,v:0}, w=W.get(k)||{n:0,v:0}, x=X.get(k)||{n:0,v:0};
-    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v, wn:w.n, wv:w.v, xn:x.n, xv:x.v}; });
+    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v, wn:w.n, wv:w.v, xn:x.n, xv:x.v*FM_LANE_SHARE}; });
 }
 /* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
 function laneCapacity(lane){
@@ -1387,7 +1389,7 @@ function renderLaneView(){
 }
 $('laneExport').onclick=()=>{
   const rows=laneTotals();
-  const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fourth_source,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
+  const lines=['lane_code,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fm_load,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
   rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv;
     lines.push([csvCell(disp(x.lane)),+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
