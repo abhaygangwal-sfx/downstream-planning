@@ -98,6 +98,9 @@ tr.muted td{color:var(--muted)}
 td.spill-pos{color:var(--bad);font-weight:650}
 td.spill-neg{color:var(--ok);font-weight:650}
 h3.sub{font-size:14px;margin:18px 0 4px}
+td.plan{white-space:nowrap}
+td.plan label.tick{font-size:12px;color:var(--ink);gap:5px;margin:1px 0}
+td.plan select.vehsel{margin-top:4px;font-size:12px;padding:4px 6px}
 .alert.soft h3{color:var(--warn)}
 .alert .mrow{display:flex;gap:10px;align-items:center;padding:4px 0;flex-wrap:wrap}
 .alert .mrow span.n{min-width:220px}
@@ -236,7 +239,7 @@ h3.sub{font-size:14px;margin:18px 0 4px}
       <div class="row"><label class="inline" style="font-size:13px"><input type="checkbox" id="dedupeChk" checked> Remove duplicate AWBs across all sources</label><button class="btn primary" id="laneExport">Download lane totals</button></div>
     </div>
     <div class="tablewrap" style="max-height:560px">
-      <table><thead><tr><th>Row Labels</th><th class="num">AWB FWD floor</th><th class="num">AWB LH intransit</th><th class="num">AWB Warehouse pendency</th><th class="num">AWB FM load</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol FM load</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th></tr></thead><tbody id="laneBody"></tbody></table>
+      <table><thead><tr><th>Row Labels</th><th class="num">AWB FWD floor</th><th class="num">AWB LH intransit</th><th class="num">AWB Warehouse pendency</th><th class="num">AWB FM load</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol FM load</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th><th>Adhoc / LH aligned</th></tr></thead><tbody id="laneBody"></tbody></table>
     </div>
   </section>
 
@@ -1434,9 +1437,9 @@ function renderLaneView(){
       if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
       else { const sp=tv-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp)+'</td>'; }
     }
-    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fn,0)+'</td><td class="num">'+fmt(x.hn,0)+'</td><td class="num">'+fmt(x.wn,0)+'</td><td class="num">'+fmt(x.xn,0)+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num">'+fmt(x.wv)+'</td><td class="num">'+fmt(x.xv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+'</tr>';
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fn,0)+'</td><td class="num">'+fmt(x.hn,0)+'</td><td class="num">'+fmt(x.wn,0)+'</td><td class="num">'+fmt(x.xn,0)+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num">'+fmt(x.wv)+'</td><td class="num">'+fmt(x.xv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+planCell(normTM(x.lane))+'</tr>';
   }).join('')
-    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fn'),0)+'</b></td><td class="num"><b>'+fmt(sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('wn'),0)+'</b></td><td class="num"><b>'+fmt(sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('wv'))+'</b></td><td class="num"><b>'+fmt(sum('xv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn')+sum('wn')+sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv')+sum('wv')+sum('xv'))+'</b></td><td></td><td></td><td></td></tr>';
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fn'),0)+'</b></td><td class="num"><b>'+fmt(sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('wn'),0)+'</b></td><td class="num"><b>'+fmt(sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('wv'))+'</b></td><td class="num"><b>'+fmt(sum('xv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn')+sum('wn')+sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv')+sum('wv')+sum('xv'))+'</b></td><td></td><td></td><td></td><td></td></tr>';
   $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
     + 'Total AWB = number of shipments per lane (all sources). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = sum of all Sum of vol columns. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
     + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
@@ -1445,11 +1448,35 @@ function renderLaneView(){
     + (state.dupCnt && $('dedupeChk').checked ? ' Duplicates removed (first occurrence kept, in order Floor, LH, Warehouse, FM Load): Floor '+fmt(state.dupCnt.F,0)+', LH '+fmt(state.dupCnt.H,0)+', Warehouse '+fmt(state.dupCnt.W,0)+', FM Load '+fmt(state.dupCnt.X,0)+'.' : '');
 }
 $('dedupeChk').onchange=()=>renderLaneView();
+/* Lane plan: Adhoc required / LH aligned (with the aligned vehicle), kept on this computer per lane. */
+const PLAN_KEY='downstreamPlanning.lanePlan.v1';
+state.lanePlan=(()=>{ try{ return JSON.parse(localStorage.getItem(PLAN_KEY)||'{}')||{}; }catch(e){ return {}; } })();
+function savePlan(){ try{ localStorage.setItem(PLAN_KEY, JSON.stringify(state.lanePlan)); }catch(e){} }
+function vehicleOptions(){ return [...new Set([...state.vc.values()].map(v=>v.fleet))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})); }
+function planCell(k){
+  const p=state.lanePlan[k]||{};
+  const opts=vehicleOptions();
+  return '<td class="plan" data-lane="'+esc(k)+'">'
+    +'<label class="inline tick"><input type="checkbox" data-k="adhoc"'+(p.adhoc?' checked':'')+'> Adhoc required</label>'
+    +'<label class="inline tick"><input type="checkbox" data-k="lh"'+(p.lh?' checked':'')+'> LH aligned</label>'
+    +(p.lh ? '<select data-k="veh" class="vehsel"><option value="">Select vehicle</option>'
+      + (opts.length ? opts.map(o=>'<option'+(o===p.veh?' selected':'')+'>'+esc(o)+'</option>').join('') : '')
+      + '</select>'+(opts.length?'':' <span class="muted" style="font-size:11px">upload vehicle capacity sheet</span>') : '')
+    +'</td>';
+}
+$('laneBody').addEventListener('change', e=>{
+  const td=e.target.closest('td.plan'); if(!td) return;
+  const k=td.dataset.lane, p=state.lanePlan[k]||{}, t=e.target.dataset.k;
+  if(t==='adhoc') p.adhoc=e.target.checked;
+  else if(t==='lh'){ p.lh=e.target.checked; if(!p.lh) p.veh=''; }
+  else if(t==='veh') p.veh=e.target.value;
+  state.lanePlan[k]=p; savePlan(); renderLaneView();
+});
 $('laneExport').onclick=()=>{
   const rows=laneTotals();
-  const lines=['lane_code,awb_fwd_floor,awb_lh_intransit,awb_warehouse_pendency,awb_fm_load,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fm_load,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover'];
-  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv;
-    lines.push([csvCell(disp(x.lane)),x.fn,x.hn,x.wn,x.xn,+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4)].join(',')); });
+  const lines=['lane_code,awb_fwd_floor,awb_lh_intransit,awb_warehouse_pendency,awb_fm_load,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fm_load,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover,adhoc_required,lh_aligned,aligned_vehicle'];
+  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv, p=state.lanePlan[normTM(x.lane)]||{};
+    lines.push([csvCell(disp(x.lane)),x.fn,x.hn,x.wn,x.xn,+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4),p.adhoc?'yes':'no',p.lh?'yes':'no',csvCell(p.lh?(p.veh||''):'')].join(',')); });
   download('lane_totals_'+stamp()+'.csv',lines);
 };
 function renderLHPreview(){
