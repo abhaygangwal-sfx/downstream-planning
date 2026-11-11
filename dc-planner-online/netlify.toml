@@ -1,0 +1,8 @@
+# Netlify: set SUPABASE_URL and SUPABASE_ANON_KEY under Site configuration → Environment variables.
+[build]
+  command = "node scripts/build-config.mjs"
+  publish = "public"
+
+[build.environment]
+  NODE_VERSION = "20"
+# Security headers come from public/_headers.

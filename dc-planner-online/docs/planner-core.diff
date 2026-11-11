@@ -1,0 +1,136 @@
+--- original: <script> in DC_Planner_v3.html
++++ public/assets/planner-core.js
+@@ -1025,8 +1025,8 @@
+ $('dedupeChk').onchange=()=>renderLaneView();
+ /* Lane plan: Adhoc required / LH aligned (with the aligned vehicle), kept on this computer per lane. */
+ const PLAN_KEY='downstreamPlanning.lanePlan.v1';
+-state.lanePlan=(()=>{ try{ return JSON.parse(localStorage.getItem(CUR_PLAN_KEY)||'{}')||{}; }catch(e){ return {}; } })();
+-function savePlan(){ try{ localStorage.setItem(CUR_PLAN_KEY, JSON.stringify(state.lanePlan)); }catch(e){} }
++state.lanePlan=(()=>{ try{ return JSON.parse(localStorage.getItem(PLAN_KEY)||'{}')||{}; }catch(e){ return {}; } })();
++function savePlan(){ try{ localStorage.setItem(PLAN_KEY, JSON.stringify(state.lanePlan)); }catch(e){} }
+ function vehicleOptions(){ return [...new Set([...state.vc.values()].map(v=>v.fleet))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})); }
+ function planCell(k){
+   const p=state.lanePlan[k]||{};
+@@ -1055,94 +1055,23 @@
+     lines.push([csvCell(disp(x.lane)),x.fn,x.hn,x.wn,x.xn,+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4),p.adhoc?'yes':'no',p.lh?'yes':'no',csvCell(p.lh?(p.veh||''):'')].join(',')); });
+   download('lane_totals_'+stamp()+'.csv',lines);
+ };
+-/* Google Sheets workflow. Set SHEET_API once to the web app URL from the setup steps. */
+-const SHEET_API='PASTE_WEB_APP_URL_HERE';
+-const CUR_PLAN_KEY='downstreamPlanning.currentPlan.v1', DC_NAME_KEY='downstreamPlanning.dcName.v1', REQ_KEY='downstreamPlanning.pendingRequest.v1';
++/* ---------- Online workflow bridge ----------
++   Replaces the former Google Sheets block (SHEET_API, Save & Send, Refresh Approved Plan).
++   The Supabase code lives in assets/planner-online.js. It never calculates anything:
++   it only reads the lane rows below and writes the LH status back into the lane table. */
+ state.lhStatus={};
+-try{ $('dcName').value=localStorage.getItem(DC_NAME_KEY)||''; }catch(e){}
+-$('dcName').onchange=()=>{ try{ localStorage.setItem(DC_NAME_KEY,$('dcName').value.trim()); }catch(e){} };
+-function sheetMsg(t,bad){ const m=$('sheetMsg'); m.textContent=t; m.style.color=bad?'#b42318':''; }
+-function apiReady(){ return SHEET_API.indexOf('https://script.google.com/')===0; }
+-function fmtDt(iso){ return iso? new Date(iso).toLocaleString() : '-'; }
+-function currentPlan(){ try{ return JSON.parse(localStorage.getItem(CUR_PLAN_KEY)||'null'); }catch(e){ return null; } }
+-function newPlanId(){ return 'P'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+Math.random().toString(36).slice(2,7); }
+-function sigOf(rows){ const s=JSON.stringify(rows); let h=0; for(let i=0;i<s.length;i++){ h=((h<<5)-h+s.charCodeAt(i))|0; } return String(h); }
+-async function apiGet(params){
+-  const q=Object.keys(params).map(k=>encodeURIComponent(k)+'='+encodeURIComponent(params[k])).join('&');
+-  const r=await fetch(SHEET_API+'?'+q+'&t='+Date.now());
+-  const j=await r.json(); if(!j.ok) throw new Error(j.error||'the sheet returned an error.'); return j;
+-}
+-async function apiPost(body){
+-  const r=await fetch(SHEET_API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
+-  const j=await r.json(); if(!j.ok) throw new Error(j.error||'the sheet returned an error.'); return j;
+-}
+-
+-/* DC: publish the plan for LH review. Same plan id + unchanged rows = same request, so a retry never creates a duplicate. */
+-$('sheetSave').onclick=async()=>{
+-  if(!apiReady()){ sheetMsg('Set SHEET_API at the top of the planner file (see setup steps).',true); return; }
+-  if(!state.data && !state.lh && !state.wh && !state.fo){ sheetMsg('Load the data sources first.',true); return; }
+-  const name=$('dcName').value.trim();
+-  if(!name){ sheetMsg('Type your name first. It is recorded with the plan.',true); $('dcName').focus(); return; }
+-  try{ localStorage.setItem(DC_NAME_KEY,name); }catch(e){}
+-  const rows=laneTotals().map(x=>{
++/* Same lane rows the Sheets workflow published; the per-source columns are added for the admin view. */
++function planRows(){
++  return laneTotals().map(x=>{
+     const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv, p=state.lanePlan[normTM(x.lane)]||{};
+     return {lane:x.lane, total_awb:x.fn+x.hn+x.wn+x.xn, total_volumetric:+tv.toFixed(4), fleet_type:cap.fleet||'',
+       vehicle_capacity:cap.capacity==null?'':cap.capacity, spillover:cap.capacity==null?'':+(tv-cap.capacity).toFixed(4),
+-      adhoc_required:p.adhoc?'yes':'no', dc_vehicle:p.lh?(p.veh||''):''};
++      adhoc_required:p.adhoc?'yes':'no', dc_vehicle:p.lh?(p.veh||''):'',
++      lh_aligned:p.lh?'yes':'no',
++      awb_fwd_floor:x.fn, awb_lh_intransit:x.hn, awb_warehouse_pendency:x.wn, awb_fm_load:x.xn,
++      vol_fwd_floor:+x.fv.toFixed(4), vol_lh_intransit:+x.hv.toFixed(4), vol_warehouse_pendency:+x.wv.toFixed(4), vol_fm_load:+x.xv.toFixed(4)};
+   });
+-  if(!rows.length){ sheetMsg('No lanes to publish. Load the data first.',true); return; }
+-  const cur=currentPlan();
+-  const planId = cur && cur.plan_id ? cur.plan_id : newPlanId();
+-  let pend=null; try{ pend=JSON.parse(localStorage.getItem(REQ_KEY)||'null'); }catch(e){}
+-  const sig=sigOf(rows);
+-  if(!pend || pend.plan_id!==planId || pend.sig!==sig){
+-    pend={request_id:'R'+Date.now()+'-'+Math.random().toString(36).slice(2,8), plan_id:planId, sig:sig};
+-  }
+-  try{ localStorage.setItem(REQ_KEY,JSON.stringify(pend)); }catch(e){}
+-  const btn=$('sheetSave'); btn.disabled=true;
+-  sheetMsg('Publishing '+planId+' for LH review…');
+-  try{
+-    const j=await apiPost({request_id:pend.request_id, plan_id:planId, origin_dc:hubDisplay()||'',
+-      plan_date:new Date().toISOString().slice(0,10), created_by:name, rows:rows, vehicles:vehicleOptions()});
+-    try{ localStorage.removeItem(REQ_KEY); localStorage.setItem(CUR_PLAN_KEY,JSON.stringify({plan_id:planId, version:j.version})); }catch(e){}
+-    sheetMsg(j.duplicate ? 'This plan was already published (version '+j.version+'). Nothing new was sent.'
+-      : 'Published '+planId+' as version '+j.version+'. '+(j.emailed?'Email sent to the LH team.':'Published, but the email was NOT sent: '+(j.email_error||'no recipients set in the Config tab.')));
+-    refreshApproved();
+-  }catch(e){
+-    sheetMsg('Not published: '+e.message+' Click Save & Send again. Nothing is lost; your plan is still on this computer.',true);
+-  }finally{ setTimeout(()=>{ btn.disabled=false; },3000); }
+-};
+-
+-/* DC: show only LH-approved requirements (never unapproved edits). */
+-async function refreshApproved(){
+-  if(!apiReady()){ sheetMsg('Set SHEET_API at the top of the planner file (see setup steps).',true); return; }
+-  const cur=currentPlan();
+-  if(!cur){ sheetMsg('No plan published yet. Click Save & Send for LH Approval first.',true); return; }
+-  try{
+-    const j=await apiGet({action:'approved', plan_id:cur.plan_id});
+-    const m={};
+-    (j.lanes||[]).forEach(x=>{
+-      m[normTM(x.lane)]='Approved v'+j.approved_version+' · '+(x.approved_vehicle||'no vehicle')
+-        +(x.approved_vehicle_count?' · count '+x.approved_vehicle_count:'')+(x.approved_remarks?' - '+x.approved_remarks:'');
+-    });
+-    state.lhStatus=m; renderLaneView();
+-    let banner;
+-    if(j.approved_version==null){
+-      banner='No approved version yet. Latest is v'+j.latest_version+' ('+j.latest_status+'). No approved requirements to show.';
+-    } else if(j.latest_status==='Approved'){
+-      banner='Approved: '+j.plan_id+' v'+j.approved_version+' by '+(j.approved_by||'LH')+' on '+fmtDt(j.approved_at)+'.';
+-    } else {
+-      const why = j.latest_status==='Pending Review' ? 'Pending approval'
+-                : j.latest_status==='Changes Submitted' ? 'LH has edited but not approved'
+-                : 'Rejected';
+-      banner=why+' (latest v'+j.latest_version+'). Showing last approved v'+j.approved_version+'.';
+-    }
+-    sheetMsg(banner+' Last updated '+fmtDt(j.last_updated)+' by '+(j.last_updated_by||'-')+'.', j.latest_status==='Rejected');
+-  }catch(e){
+-    sheetMsg('Sheet unavailable, so the approved plan was not refreshed: '+e.message+' Showing the last values loaded.',true);
+-  }
+ }
+-$('sheetRefresh').onclick=refreshApproved;
+ function renderLHPreview(){
+   const L=state.lh; const want=['Awb_number','Client','client_name','MM_destination','Shipment_Destination_dc','Shipment_Final_Destination_dc','Delivery_hub'];
+   const cols=[...new Set(want.map(w=>findCol(L.headers,w)).filter(i=>i>=0))];
+@@ -1179,4 +1108,16 @@
+ wireDrop('lhDropB','lhFileB',f=>handleLHFile(f,'B'));
+ try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; localStorage.removeItem('volumetricPlanner.hm.v1'); }catch(e){}
+ loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
++/* Read-only window for the online layer (plus two setters that reuse the planner's own render path). */
++window.DCPlanner={
++  hasData:()=>!!(state.data||state.lh||state.wh||state.fo),
++  planRows, vehicleOptions, hubDisplay,
++  getOrigin:()=>state.planOrigin,
++  setOrigin(v){ const s=$('originSel'); if(s.value===v) return; s.value=v; if(s.value===v) s.onchange(); },
++  getLanePlan:()=>JSON.parse(JSON.stringify(state.lanePlan||{})),
++  setLanePlan(p){ state.lanePlan=(p&&typeof p==='object')?JSON.parse(JSON.stringify(p)):{}; savePlan(); renderLaneView(); },
++  setLHStatus(m){ state.lhStatus=m||{}; renderLaneView(); },
++  normLane:normTM, dispLane:disp, fmt, esc
++};
++document.dispatchEvent(new CustomEvent('dcplanner:ready'));
+ })();

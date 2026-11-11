@@ -1,0 +1,1123 @@
+(function(){
+"use strict";
+const $ = id => document.getElementById(id);
+const STORE = 'volumetricPlanner.coeffs.v1';
+const state = { data:null, coeffs:new Map(), clientIdx:-1, groupIdx:-1, defaultCoeff:1, computed:null, tm:new Map(), tmName:'', tmFleet:new Map(), rm:new Map(), rmName:'', vc:new Map(), vcName:'', rmOD:new Map(), lh:null, tmOrigins:[], planOrigin:'', nlIdx:-1, locIdx:-1 };
+
+const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
+const fmt = (n,d=2) => Number(n).toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toNum(v){ if(v==null) return NaN; const s=String(v).trim().replace(/,/g,''); if(s==='') return NaN; return Number(s); }
+
+/* ---------- storage ---------- */
+function saveCoeffs(){
+  try{ localStorage.setItem(STORE, JSON.stringify({list:[...state.coeffs.values()], def:state.defaultCoeff==null?'none':state.defaultCoeff})); }catch(e){}
+}
+function loadCoeffs(){
+  try{
+    const raw = localStorage.getItem(STORE); if(!raw) return;
+    const o = JSON.parse(raw);
+    (o.list||[]).forEach(x=>state.coeffs.set(norm(x.name),{name:x.name,coeff:x.coeff}));
+    if(o.def==='none'){ state.defaultCoeff=null; $('defaultCoeff').value=''; }
+    else if(o.def!=null && o.def!=='' && !isNaN(Number(o.def))){ state.defaultCoeff=Number(o.def); $('defaultCoeff').value=o.def; }
+    if(state.coeffs.size) $('coeffInfo').innerHTML = 'Loaded <b>'+state.coeffs.size+' clients</b> saved on this computer.';
+  }catch(e){}
+}
+
+/* ---------- CSV ---------- */
+function parseCSV(text){
+  text = text.replace(/^﻿/,'');
+  const nl = text.indexOf('\n'); const first = nl>0 ? text.slice(0,nl) : text;
+  const delim = [',','\t',';','|'].map(d=>[d,first.split(d).length]).sort((a,b)=>b[1]-a[1])[0][0];
+  const rows=[]; let row=[], f='', q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){
+      if(ch==='"'){ if(text[i+1]==='"'){f+='"';i++;} else q=false; }
+      else f+=ch;
+    } else if(ch==='"' && f===''){ q=true; }
+    else if(ch===delim){ row.push(f); f=''; }
+    else if(ch==='\n'){ row.push(f); rows.push(row); row=[]; f=''; }
+    else if(ch!=='\r'){ f+=ch; }
+  }
+  if(f!=='' || row.length){ row.push(f); rows.push(row); }
+  return rows.filter(r=>r.some(v=>String(v).trim()!==''));
+}
+
+/* ---------- XLSX (built-in reader, no internet needed) ---------- */
+async function unzip(buf){
+  const dv=new DataView(buf); let eocd=-1;
+  for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-65557);i--){ if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;} }
+  if(eocd<0) throw new Error('This does not look like a valid .xlsx file.');
+  const cnt=dv.getUint16(eocd+10,true); let off=dv.getUint32(eocd+16,true);
+  const entries={}; const td=new TextDecoder();
+  for(let k=0;k<cnt;k++){
+    if(dv.getUint32(off,true)!==0x02014b50) break;
+    const method=dv.getUint16(off+10,true), csize=dv.getUint32(off+20,true);
+    const nlen=dv.getUint16(off+28,true), elen=dv.getUint16(off+30,true), clen=dv.getUint16(off+32,true), lho=dv.getUint32(off+42,true);
+    const name=td.decode(new Uint8Array(buf,off+46,nlen));
+    entries[name.toLowerCase()]={method,csize,lho};
+    off+=46+nlen+elen+clen;
+  }
+  return {
+    has:n=>!!entries[n.toLowerCase()],
+    async text(n){
+      const e=entries[n.toLowerCase()]; if(!e) return null;
+      const lnl=dv.getUint16(e.lho+26,true), lel=dv.getUint16(e.lho+28,true);
+      const raw=new Uint8Array(buf,e.lho+30+lnl+lel,e.csize);
+      let bytes;
+      if(e.method===0) bytes=raw;
+      else if(e.method===8){
+        if(typeof DecompressionStream==='undefined') throw new Error('This browser is too old to read .xlsx. Use a recent Chrome/Edge, or save the file as CSV.');
+        const s=new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        bytes=new Uint8Array(await new Response(s).arrayBuffer());
+      } else throw new Error('Unsupported compression in .xlsx file.');
+      return new TextDecoder().decode(bytes);
+    }
+  };
+}
+const unx = s => s.replace(/&(lt|gt|amp|quot|apos|#x[0-9a-fA-F]+|#\d+);/g,(m,g)=>
+  g==='lt'?'<':g==='gt'?'>':g==='amp'?'&':g==='quot'?'"':g==='apos'?"'":
+  g[1]==='x'?String.fromCodePoint(parseInt(g.slice(2),16)):String.fromCodePoint(parseInt(g.slice(1),10)));
+function textRuns(xml){
+  xml = xml.replace(/<(\w+:)?rPh\b[\s\S]*?<\/(\w+:)?rPh>/g,'');
+  let out=''; const re=/<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>/g; let m;
+  while((m=re.exec(xml))) out+=m[1];
+  return unx(out);
+}
+function serialToDate(n){
+  const d=new Date(Math.round((n-25569)*86400000)); const p=x=>String(x).padStart(2,'0');
+  const date=d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate());
+  const hasTime=d.getUTCHours()||d.getUTCMinutes()||d.getUTCSeconds();
+  return hasTime ? date+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds()) : date;
+}
+function colIndex(ref){ let n=0; for(const ch of ref){ const c=ch.charCodeAt(0); if(c<65||c>90) break; n=n*26+(c-64);} return n-1; }
+async function parseXLSX(buf){
+  const z=await unzip(buf);
+  let sheetPath='xl/worksheets/sheet1.xml';
+  const wb=await z.text('xl/workbook.xml'), rels=await z.text('xl/_rels/workbook.xml.rels');
+  if(wb && rels){
+    const sm=wb.match(/<(?:\w+:)?sheet\b[^>]*?r:id="([^"]+)"/) || wb.match(/<(?:\w+:)?sheet\b[^>]*?\bid="([^"]+)"/);
+    if(sm){
+      const rm=new RegExp('<Relationship\\b[^>]*Id="'+sm[1]+'"[^>]*>').exec(rels);
+      const tm=rm && /Target="([^"]+)"/.exec(rm[0]);
+      if(tm){ let t=tm[1]; sheetPath = t.startsWith('/') ? t.slice(1) : 'xl/'+t.replace(/^\.\//,''); }
+    }
+  }
+  if(!z.has(sheetPath)) throw new Error('Could not find a worksheet in this file.');
+  const sst=[]; const ss=await z.text('xl/sharedStrings.xml');
+  if(ss){ const re=/<(?:\w+:)?si>([\s\S]*?)<\/(?:\w+:)?si>/g; let m; while((m=re.exec(ss))) sst.push(textRuns(m[1])); }
+  const dateXf=[]; const st=await z.text('xl/styles.xml');
+  if(st){
+    const custom={}; let mm; const nf=/<(?:\w+:)?numFmt\b[^>]*?numFmtId="(\d+)"[^>]*?formatCode="([^"]*)"/g;
+    while((mm=nf.exec(st))) custom[mm[1]]=unx(mm[2]);
+    const cx=/<(?:\w+:)?cellXfs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?cellXfs>/.exec(st);
+    if(cx){ const xr=/<(?:\w+:)?xf\b([^>]*)/g; while((mm=xr.exec(cx[1]))){
+      const id=+((/numFmtId="(\d+)"/.exec(mm[1])||[])[1]||0), code=custom[id]||'';
+      const clean=code.replace(/"[^"]*"|\[[^\]]*\]|\\./g,'');
+      dateXf.push((id>=14&&id<=22)||(id>=45&&id<=47)||(!!clean && /[dyhs]/i.test(clean) && /[dmyhs]/i.test(clean)));
+    } }
+  }
+  const xml=await z.text(sheetPath);
+  const rows=[]; const rowRe=/<(?:\w+:)?row\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?row>)/g;
+  const cRe=/<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
+  let rm;
+  while((rm=rowRe.exec(xml))){
+    if(!rm[1]) continue;
+    const row=[]; let m, seq=0; cRe.lastIndex=0;
+    while((m=cRe.exec(rm[1]))){
+      const attrs=m[1], inner=m[2]||'';
+      const r=/\br="([A-Z]+)\d+"/.exec(attrs); const idx=r?colIndex(r[1]):seq; seq=idx+1;
+      const t=(/\bt="([^"]+)"/.exec(attrs)||[])[1];
+      const v=/<(?:\w+:)?v>([\s\S]*?)<\/(?:\w+:)?v>/.exec(inner);
+      let val='';
+      if(t==='s') val = v ? (sst[+v[1]]??'') : '';
+      else if(t==='inlineStr') val = textRuns(inner);
+      else if(t==='b') val = v ? (v[1]==='1'?'TRUE':'FALSE') : '';
+      else val = v ? unx(v[1]) : '';
+      if(!t && v && dateXf.length){ const sm=/\bs="(\d+)"/.exec(attrs); if(sm && dateXf[+sm[1]] && !isNaN(+val)) val=serialToDate(+val); }
+      row[idx]=val;
+    }
+    for(let i=0;i<row.length;i++) if(row[i]===undefined) row[i]='';
+    if(row.some(x=>String(x).trim()!=='')) rows.push(row);
+  }
+  return rows;
+}
+
+async function readFile(file){
+  const name=file.name.toLowerCase();
+  if(name.endsWith('.xlsx') || name.endsWith('.xlsm')) return parseXLSX(await file.arrayBuffer());
+  if(name.endsWith('.xls')) throw new Error('Old .xls format is not supported. Please save as .xlsx or CSV.');
+  return parseCSV(await file.text());
+}
+
+/* ---------- coefficient file ---------- */
+async function handleCoeffFile(file){
+  $('coeffErr').textContent='';
+  try{
+    const rows=await readFile(file);
+    if(!rows.length) throw new Error('File is empty.');
+    let header=rows[0].map(h=>norm(h)), body=rows.slice(1);
+    let ci=header.findIndex(h=>/client/.test(h));
+    let vi=header.findIndex(h=>/coef|volum|factor|multiplier/.test(h));
+    if(ci<0 && vi<0 && !isNaN(toNum(rows[0][1]))){ body=rows; ci=0; vi=1; }  // no header row
+    if(ci<0) ci=0;
+    if(vi<0) vi = ci===0 ? 1 : 0;
+    let added=0, skipped=0; const next=new Map();
+    body.forEach(r=>{
+      const name=String(r[ci]??'').trim(); const c=toNum(r[vi]);
+      if(!name) return;
+      if(isNaN(c)){ skipped++; return; }
+      next.set(norm(name),{name,coeff:c}); added++;
+    });
+    if(!added) throw new Error('No client/coefficient pairs found. Expected columns like "Client" and "Coefficient".');
+    state.coeffs=next; saveCoeffs();
+    $('coeffInfo').innerHTML='<b>'+esc(file.name)+'</b> · '+added+' clients loaded'+(skipped?' · '+skipped+' rows skipped (no number)':'');
+    renderCoeffs(); recompute();
+  }catch(e){ $('coeffErr').textContent=e.message; }
+}
+
+/* ---------- shipment data ---------- */
+async function handleDataFile(file){
+  $('dataErr').textContent=''; $('dataInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found.');
+    const headers=rows[0].map(h=>String(h).trim());
+    const width=headers.length;
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.data={name:file.name,headers,rows:body};
+    const lower=headers.map(h=>h.toLowerCase());
+    state.clientIdx = lower.indexOf('client_name')>=0 ? lower.indexOf('client_name') : lower.findIndex(h=>/client/.test(h));
+    if(state.clientIdx<0) state.clientIdx=0;
+    const nl = lower.indexOf('next_location'); state.nlIdx = nl; state.locIdx = lower.indexOf('location_name');
+    state.groupIdx = (nl>=0 && state.tm.size) ? -1 : (nl>=0 ? nl : state.clientIdx);
+    fillSelects();
+    showDataInfo();
+    recompute();
+  }catch(e){ showDataInfo(); $('dataErr').textContent=e.message+(state.data?' The previous file is still in use.':''); }
+}
+function showDataInfo(){
+  const D=state.data;
+  if(!D){ $('dataInfo').textContent=''; return; }
+  $('dataInfo').innerHTML='<b>'+esc(D.name)+'</b> · '+fmt(D.rows.length,0)+' rows · '+D.headers.length+' columns · <button class="linkbtn" id="dataRemove">Remove</button>';
+  $('dataRemove').onclick=()=>{ state.data=null; $('dataErr').textContent=''; showDataInfo(); recompute(); renderLaneView(); };
+}
+
+function fillSelects(){
+  const h=state.data.headers;
+  const opts=h.map((x,i)=>'<option value="'+i+'">'+esc(x||('Column '+(i+1)))+'</option>').join('');
+  $('clientCol').innerHTML=opts; $('clientCol').value=state.clientIdx;
+  const laneOpt=(state.tm.size&&state.nlIdx>=0)?'<option value="-1">Lane Code (transport master)</option>':'';
+  $('groupBy').innerHTML=opts+laneOpt; $('groupBy').value=state.groupIdx;
+}
+
+/* ---------- calculation ---------- */
+function coeffFor(client){
+  const hit=state.coeffs.get(norm(client));
+  if(hit) return {c:hit.coeff,src:'matched'};
+  if(state.defaultCoeff!=null && state.defaultCoeff!=='' && !isNaN(state.defaultCoeff)) return {c:Number(state.defaultCoeff),src:'default'};
+  return {c:null,src:'missing'};
+}
+const NE_KEY='__not_eligible__';
+const normTM = s => String(s==null?'':s).replace(/[_\s]+/g,' ').trim().toLowerCase();
+const disp = s => String(s==null?'':s).replace(/_/g,' ').replace(/\s+/g,' ').trim();
+/* Find the lane for one shipment.
+   1. Candidates = lanes where next_location is a Destination (optionally only lanes of the chosen origin).
+   2. Drop return legs where the destination is the lane's own origin hub.
+   3. If several remain, prefer the lane whose origin matches the shipment's location_name.
+   4. Otherwise the lane where the destination appears most often in the master (ties: first in file). */
+/* true when the Lane Code starts with the hub name, e.g. "OneAMD DC-Limbasi DC" for hub "OneAMD DC" */
+/* lane's destination part equals the hub, e.g. "OneAMD DC-OneAMD DC" or "X-OneAMD DC" */
+function laneEndsWith(lane, hubKey){ const l=normTM(lane); return l===hubKey || l.endsWith('-'+hubKey); }
+function laneStarts(lane, hubKey){ const l=normTM(lane); return l.startsWith(hubKey) && !/[a-z0-9]/.test(l.charAt(hubKey.length)); }
+function resolveLane(nl, loc){
+  const k=normTM(nl); const e=state.tm.get(k);
+  if(!k || !e) return {status:'ne'};
+  let c=e.cands;
+  if(state.planOrigin){
+    if(k===state.planOrigin) return {status:'ne'};           /* destination is the selected hub itself: not planned */
+    c=c.filter(x=>laneStarts(x.lane,state.planOrigin) && !laneEndsWith(x.lane,state.planOrigin));
+    if(!c.length) return {status:'ne'};
+  }
+  const spokes=c.filter(x=>x.o!==k);
+  if(!spokes.length) return {status:'hub', lane:disp(e.dest)+' (origin hub)'};
+  let pool=spokes;
+  if(pool.length>1 && loc){ const lk=normTM(loc); const byLoc=pool.filter(x=>x.o===lk); if(byLoc.length) pool=byLoc; }
+  pool=pool.slice().sort((a,b)=>b.n-a.n || a.i-b.i);
+  const lanes=[...new Set(pool.map(x=>x.lane))];
+  return {status:'ok', lane:lanes[0], alts:lanes.slice(1)};
+}
+function groupName(){ return state.groupIdx===-1 ? 'Lane Code' : (state.data.headers[state.groupIdx]||'Group'); }
+function recompute(){
+  if(!state.data){ $('results').classList.add('hidden'); return; }
+  $('results').classList.remove('hidden');
+  if(state.groupIdx===-1 && (!state.tm.size || state.nlIdx<0)){ state.groupIdx=state.nlIdx>=0?state.nlIdx:state.clientIdx; fillSelects(); }
+  const laneMode=state.groupIdx===-1;
+  const {rows}=state.data, ci=state.clientIdx, gi=state.groupIdx;
+  const per=new Array(rows.length); const groups=new Map(); const missing=new Map(); const matchedClients=new Set();
+  const neMap=new Map(), ambMap=new Map();
+  let total=0, missRows=0, neN=0;
+  for(let i=0;i<rows.length;i++){
+    const client=rows[i][ci]; const r=coeffFor(client); per[i]=r;
+    if(r.src!=='matched'){ missRows++; const k=norm(client); const m=missing.get(k)||{name:String(client??'').trim()||'(blank)',blank:!String(client??'').trim(),n:0}; m.n++; missing.set(k,m); }
+    else matchedClients.add(norm(client));
+    let gk, nlName='', nlKey='';
+    if(laneMode){
+      const nl=rows[i][state.nlIdx]; nlName=String(nl??'').trim()||'(blank)'; nlKey=normTM(nl)||'(blank)';
+      const res=resolveLane(nl, state.locIdx>=0?rows[i][state.locIdx]:'');
+      if(res.status==='ne'){
+        neN++; const m=neMap.get(nlKey)||{name:nlName,n:0,vol:0}; m.n++; if(r.c!=null) m.vol+=r.c; neMap.set(nlKey,m);
+        continue;
+      }
+      gk=res.lane;
+      if(res.alts && res.alts.length){ const a=ambMap.get(nlKey)||{name:nlName,lanes:new Map(),n:0}; a.n++; a.lanes.set(res.lane,res.alts); ambMap.set(nlKey,a); }
+    } else gk=String(rows[i][gi]??'').trim()||'(blank)';
+    if(r.c!=null) total+=r.c;
+    const g=groups.get(gk)||{n:0,vol:0,miss:0,dests:new Map()}; g.n++;
+    if(r.c!=null) g.vol+=r.c; else g.miss++;
+    if(laneMode && !g.dests.has(nlKey)) g.dests.set(nlKey,nlName);
+    groups.set(gk,g);
+  }
+  state.computed={per,groups,total,neMap,ambMap,neN,laneMode};
+  if(state.rm.size && state.locIdx>=0 && state.nlIdx>=0){
+    let hit=0, tot=0; const seen=new Set();
+    rows.forEach(rw=>{ const k=normTM(rw[state.locIdx])+'|'+normTM(rw[state.nlIdx]); if(seen.has(k)) return; seen.add(k); tot++; if(state.rm.has(k)) hit++; });
+    $('rmInfo').innerHTML='<b>'+esc(state.rmName)+'</b> · '+fmt(hit,0)+' of '+fmt(tot,0)+' location → next_location pairs found in the route mapping';
+  }
+  $('kRows').textContent=fmt(rows.length,0);
+  $('kVol').textContent=fmt(total);
+  $('kClients').textContent=fmt(matchedClients.size,0);
+  $('kMiss').textContent=fmt(missRows,0);
+  $('kMissBox').classList.toggle('warn',missRows>0);
+  renderMissing(missing);
+  renderSummary();
+  renderReview();
+  renderPreview();
+  renderLaneView();
+}
+
+function renderMissing(missing){
+  const box=$('missingBox');
+  if(!missing.size || state.defaultCoeff!=null){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const list=[...missing.values()].sort((a,b)=>b.n-a.n);
+  const hasDef=state.defaultCoeff!=null;
+  box.classList.toggle('soft',hasDef);
+  $('missingTitle').textContent=(list.length>1? list.length+' clients are':'1 client is')+' not in your coefficient table'+
+    (hasDef? ', so counted at the default '+state.defaultCoeff+'. Set a value to override.' : ' and have no coefficient. Add one here and it will be saved to your table.');
+  $('missingList').innerHTML=list.slice(0,50).map((m,i)=>
+    '<div class="mrow"><span class="n"><b>'+esc(m.name)+'</b> <span class="muted">· '+fmt(m.n,0)+' rows</span></span>'+
+    (m.blank?'<span class="muted">blank client name</span></div>':'<input type="number" step="any" placeholder="coeff" data-miss="'+i+'"><button class="btn" data-missbtn="'+i+'">Save</button></div>')
+  ).join('') + (list.length>50?'<div class="muted">…and '+(list.length-50)+' more</div>':'');
+  $('missingList').querySelectorAll('[data-missbtn]').forEach(b=>b.onclick=()=>{
+    const i=+b.dataset.missbtn; const inp=$('missingList').querySelector('[data-miss="'+i+'"]');
+    const v=toNum(inp.value); if(isNaN(v)){ inp.focus(); return; }
+    const m=list[i]; state.coeffs.set(norm(m.name),{name:m.name,coeff:v}); saveCoeffs(); renderCoeffs(); recompute();
+  });
+}
+
+function renderSummary(){
+  const {groups,total,neN}=state.computed; const laneMode=state.groupIdx===-1;
+  const gname=groupName();
+  $('gHead').textContent=gname; $('sumTitle').textContent='Volumetric by '+(laneMode?'lane':gname);
+  $('destHead').classList.toggle('hidden',!laneMode);
+  const sortBy=$('sortBy').value, q=norm($('sumSearch').value);
+  const destText=g=>[...g.dests.values()].map(disp).sort((a,b)=>a.localeCompare(b)).join(', ');
+  const list=[...groups.entries()].filter(([k,g])=>!q||norm(disp(k)).includes(q)||(laneMode&&norm(destText(g)).includes(q))).sort((a,b)=>
+    sortBy==='vol'? b[1].vol-a[1].vol : sortBy==='n'? b[1].n-a[1].n : a[0].localeCompare(b[0],undefined,{sensitivity:'base',numeric:true}));
+  const LIM=3000; const dcell=laneMode?'<td></td>':'';
+  const sumN=list.reduce((a,x)=>a+x[1].n,0), sumV=list.reduce((a,x)=>a+x[1].vol,0);
+  const eligibleN=state.data.rows.length-(laneMode?neN:0);
+  $('sumBody').innerHTML=list.slice(0,LIM).map(([k,g])=>
+    '<tr><td>'+esc(disp(k))+(g.miss?' <span class="tag miss">'+g.miss+' missing</span>':'')+'</td>'+
+    (laneMode?'<td class="wrapcell">'+esc(destText(g))+'</td>':'')+
+    '<td class="num">'+fmt(g.n,0)+'</td><td class="num"><b>'+fmt(g.vol)+'</b></td></tr>').join('')
+    + (q ? '<tr><td><b>Filtered total</b></td>'+dcell+'<td class="num"><b>'+fmt(sumN,0)+'</b></td><td class="num"><b>'+fmt(sumV)+'</b></td></tr>' : '')
+    + '<tr><td><b>Grand total</b></td>'+dcell+'<td class="num"><b>'+fmt(eligibleN,0)+'</b></td><td class="num"><b>'+fmt(total)+'</b></td></tr>';
+  let note;
+  if(list.length>LIM) note='Showing '+LIM+' of '+fmt(list.length,0)+' rows. The download includes all.';
+  else if(laneMode){
+    note=fmt(list.length,0)+(list.length===1?' lane':' lanes')+(state.planOrigin?' starting from '+(HUBS.find(h=>normTM(h)===state.planOrigin)||''):'')+'. Each shipment adds its client\'s coefficient to the lane of its next_location.';
+    if(neN) note+=' '+fmt(neN,0)+(neN===1?' shipment is':' shipments are')+' not eligible and excluded (listed below).';
+  } else note=fmt(list.length,0)+' '+gname+' values. Each shipment adds its client\'s coefficient to its '+gname+'.';
+  $('sumNote').textContent=note;
+}
+
+function renderReview(){
+  const c=state.computed;
+  if(!c.laneMode){ $('reviewPanel').classList.add('hidden'); return; }
+  $('reviewPanel').classList.remove('hidden');
+  const ne=[...c.neMap.values()].sort((a,b)=>b.n-a.n);
+  $('neCount').textContent='· '+fmt(ne.length,0)+(ne.length===1?' destination · ':' destinations · ')+fmt(c.neN,0)+(c.neN===1?' shipment':' shipments');
+  $('neHint').textContent='These next_location values have no matching Destination in the transportation master'+(state.planOrigin?' on lanes starting from '+(HUBS.find(h=>normTM(h)===state.planOrigin)||''):'')+', so they are not counted in any lane.';
+  $('neBody').innerHTML = ne.length ? ne.map(m=>'<tr><td>'+esc(disp(m.name))+'</td><td class="num">'+fmt(m.n,0)+'</td><td class="num">'+fmt(m.vol)+'</td></tr>').join('')
+    : '<tr><td colspan="3" class="muted">None. Every next_location matched a lane.</td></tr>';
+  $('exportNE').disabled=!ne.length;
+  const amb=[...c.ambMap.values()].sort((a,b)=>b.n-a.n);
+  $('ambWrap').classList.toggle('hidden',!amb.length);
+  $('ambCount').textContent='· '+fmt(amb.length,0);
+  $('ambBody').innerHTML=amb.map(a=>{
+    const used=[...a.lanes.keys()], others=[...new Set([].concat(...a.lanes.values()))].filter(x=>!used.includes(x));
+    return '<tr><td>'+esc(disp(a.name))+'</td><td class="wrapcell">'+esc(used.map(disp).join(', '))+'</td><td class="wrapcell muted">'+esc(others.map(disp).join(', '))+'</td><td class="num">'+fmt(a.n,0)+'</td></tr>';
+  }).join('');
+}
+
+function renderPreview(){
+  const {headers,rows}=state.data; const per=state.computed.per;
+  const want=['awb_number','client_name','location_name','next_location','region','shipment_type','aging_bucket'];
+  let cols=want.map(w=>headers.findIndex(h=>h.toLowerCase()===w)).filter(i=>i>=0);
+  if(!cols.includes(state.clientIdx)) cols.unshift(state.clientIdx);
+  if(cols.length<3) cols=headers.map((_,i)=>i).slice(0,6);
+  const N=Math.min(200,rows.length);
+  $('prevNote').textContent='first '+N+' of '+fmt(rows.length,0)+' rows · download for all '+headers.length+' columns';
+  $('prevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(headers[i])+'</th>').join('')+'<th class="num">volumetric_coeff</th><th>coeff_source</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++){
+    const p=per[r];
+    html+='<tr>'+cols.map(i=>'<td>'+esc(rows[r][i])+'</td>').join('')+
+      '<td class="num">'+(p.c==null?'–':fmt(p.c,3))+'</td>'+
+      '<td><span class="tag '+(p.src==='matched'?'ok':p.src==='default'?'def':'miss')+'">'+p.src+'</span></td></tr>';
+  }
+  $('prevBody').innerHTML=html;
+}
+
+/* ---------- coefficient table UI ---------- */
+function renderCoeffs(){
+  const list=[...state.coeffs.entries()].sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  $('coeffCount').textContent='· '+list.length+' clients';
+  $('coeffBtnCount').textContent='('+list.length+')';
+  $('ccBtn').textContent='Client coefficients sheet'+(list.length?' ✓':'');
+  $('coeffBody').innerHTML = list.length ? list.map(([k,v])=>
+    '<tr><td>'+esc(v.name)+'</td><td class="num"><input type="number" step="any" value="'+esc(v.coeff)+'" data-k="'+esc(k)+'"></td>'+
+    '<td><button class="link" data-del="'+esc(k)+'">Remove</button></td></tr>').join('')
+    : '<tr><td colspan="3" class="muted">No coefficients yet. Upload your client coefficient file above.</td></tr>';
+  $('coeffBody').querySelectorAll('input[data-k]').forEach(inp=>inp.onchange=()=>{
+    const v=toNum(inp.value); const e=state.coeffs.get(inp.dataset.k); if(!e) return;
+    if(isNaN(v)){ inp.value=e.coeff; return; }
+    e.coeff=v; saveCoeffs(); recompute();
+  });
+  $('coeffBody').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
+    state.coeffs.delete(b.dataset.del); saveCoeffs(); renderCoeffs(); recompute();
+  });
+}
+
+/* ---------- export ---------- */
+function csvCell(v){ v=String(v==null?'':v); return /[",\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+function download(name,lines){
+  const blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+}
+const stamp=()=>new Date().toISOString().slice(0,10);
+function baseName(){ return (state.data?state.data.name:'data').replace(/\.[^.]+$/,''); }
+
+/* ---------- wiring ---------- */
+function wireDrop(btnId,inputId,handler){
+  const btn=$(btnId), inp=$(inputId);
+  btn.onclick=()=>inp.click();
+  inp.onchange=()=>{ if(inp.files[0]) handler(inp.files[0]); inp.value=''; };
+  ['dragenter','dragover'].forEach(ev=>btn.addEventListener(ev,e=>{e.preventDefault();btn.classList.add('over');}));
+  ['dragleave','drop'].forEach(ev=>btn.addEventListener(ev,e=>{e.preventDefault();btn.classList.remove('over');}));
+  btn.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) handler(f); });
+}
+wireDrop('coeffDrop','coeffFile',handleCoeffFile);
+wireDrop('dataDrop','dataFile',handleDataFile);
+window.addEventListener('dragover',e=>e.preventDefault()); window.addEventListener('drop',e=>e.preventDefault());
+
+$('defaultCoeff').onchange=()=>{ const v=$('defaultCoeff').value.trim(); state.defaultCoeff = v===''||isNaN(Number(v)) ? null : Number(v); saveCoeffs(); recompute(); };
+$('addCoeff').onclick=()=>{
+  const name=(prompt('Client name (exactly as in client_name):')||'').trim(); if(!name) return;
+  const v=toNum(prompt('Coefficient for '+name+':')); if(isNaN(v)) return;
+  state.coeffs.set(norm(name),{name,coeff:v}); saveCoeffs(); renderCoeffs(); recompute();
+};
+$('clearCoeff').onclick=()=>{ if(!confirm('Remove all saved coefficients from this computer?')) return; state.coeffs.clear(); saveCoeffs(); $('coeffInfo').textContent=''; renderCoeffs(); recompute(); };
+$('exportCoeff').onclick=()=>{
+  const lines=['Client,Coefficient'].concat([...state.coeffs.values()].sort((a,b)=>a.name.localeCompare(b.name)).map(x=>csvCell(x.name)+','+x.coeff));
+  download('client_coefficients_'+stamp()+'.csv',lines);
+};
+$('clientCol').onchange=()=>{ state.clientIdx=+$('clientCol').value; recompute(); };
+$('groupBy').onchange=()=>{ state.groupIdx=+$('groupBy').value; recompute(); };
+$('sortBy').onchange=()=>{ if(state.computed) renderSummary(); };
+$('sumSearch').oninput=()=>{ if(state.computed) renderSummary(); };
+$('exportData').onclick=()=>{
+  const {headers,rows}=state.data, per=state.computed.per;
+  const withLane=state.tm.size>0 && state.nlIdx>=0;
+  const lines=[headers.concat(['volumetric_coeff','coeff_source'], withLane?['lane_code','lane_status']:[]).map(csvCell).join(',')];
+  for(let i=0;i<rows.length;i++){
+    const extra=[per[i].c==null?'':per[i].c, per[i].src];
+    if(withLane){ const r=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:''); extra.push(r.status==='ne'?'':r.lane, r.status==='ne'?'not eligible':r.status==='hub'?'origin hub':'eligible'); }
+    lines.push(rows[i].map(csvCell).concat(extra.map(csvCell)).join(','));
+  }
+  download(baseName()+'_volumetric_'+stamp()+'.csv',lines);
+};
+$('exportSummary').onclick=()=>{
+  const {groups}=state.computed, laneMode=state.groupIdx===-1;
+  const head=[groupName()].concat(laneMode?['destinations_included']:[],['count_of_awb_number','rows_missing_coeff','sum_of_volumetric_coeff']);
+  const lines=[head.map(csvCell).join(',')];
+  [...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0],undefined,{sensitivity:'base',numeric:true})).forEach(([k,g])=>{
+    const row=[k].concat(laneMode?[[...g.dests.values()].map(disp).join(', ')]:[],[g.n,g.miss,+g.vol.toFixed(4)]);
+    lines.push(row.map(csvCell).join(','));
+  });
+  download('volumetric_by_'+(laneMode?'lane':groupName()).replace(/\s+/g,'_')+'_'+stamp()+'.csv',lines);
+};
+$('exportNE').onclick=()=>{
+  const lines=['next_location,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...state.computed.neMap.values()].sort((a,b)=>b.n-a.n).forEach(m=>lines.push([m.name,m.n,+m.vol.toFixed(4)].map(csvCell).join(',')));
+  download('not_eligible_for_planning_'+stamp()+'.csv',lines);
+};
+$('originSel').onchange=()=>{
+  state.planOrigin=$('originSel').value; try{localStorage.setItem(ORIGIN_KEY,state.planOrigin);}catch(e){}
+  computeLH(); computeWH(); computeFO();
+  if(!state.tm.size){ $('tmPanel').classList.remove('hidden'); $('tmErr').textContent='Upload the transportation master sheet to see lanes for this hub.'; return; }
+  if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
+};
+
+function showPage(which){
+  $('pageMain').classList.toggle('hidden',which!=='main');
+  $('pageCoeff').classList.toggle('hidden',which!=='coeff');
+  window.scrollTo(0,0);
+}
+$('openCoeff').onclick=()=>showPage('coeff');
+$('backMain').onclick=()=>showPage('main');
+const TM_KEY='volumetricPlanner.tm.v4', ORIGIN_KEY='volumetricPlanner.originHub';
+const HUBS='Guwahati DC|Kolkata DC|Lucknow DC|Bhubneshwar DC|Malda DC|Silchar DC|Dibrugarh DC|Patna DC|Purnia DC|Ranchi DC|Sambalpur DC|Siliguri DC|Kolkata 2 DC|Varanasi DC|Kanpur DC|Ludhiana DC|NCR Bilaspur DC|NCR Bamnoli DC|OneNCR DC|Jammu DC|NCR Tauru DC|Jaipur DC|Indore DC|Bhopal DC|Raipur DC|Sagar DC|Bangalore DC|Hyderabad DC|Chennai DC|Kochi DC|Kozhikode DC|Mysore DC|Vijayawada DC|Coimbatore DC|Hubli DC|Madurai DC|Trichy DC|Visakhapatnam DC|Bangalore XD DC|Nagpur DC|Mumbai DC|Pune DC|Aurangabad DC|Surat DC|Ahmedabad DC|Udaipur DC|Srinagar DC|Moradabad DC|Jodhpur DC|Rajahmundry DC|Gorakhpur DC|Chandigarh DC|Akola DC|Jabalpur DC|Kolkata XD DC|Hyderabad REV DC|OneSRT DC|OneAMD DC|OneRJT DC|TwoNCR DC'.split('|');
+function saveTM(){
+  try{ localStorage.setItem(TM_KEY, JSON.stringify({name:state.tmName, list:[...state.tm.entries()], origins:state.tmOrigins, fleet:[...state.tmFleet.entries()], fleetCol:state.tmFleetCol})); }
+  catch(e){ $('tmErr').textContent='Loaded, but this browser could not save the master for next time (storage full or blocked). Upload it again after reopening.'; }
+}
+function loadTM(){
+  try{
+    const raw=localStorage.getItem(TM_KEY); if(!raw) return;
+    const o=JSON.parse(raw); state.tm=new Map(o.list||[]); state.tmName=o.name||''; state.tmOrigins=o.origins||[]; state.tmFleet=new Map(o.fleet||[]); state.tmFleetCol=o.fleetCol;
+  }catch(e){}
+  fillOrigins(); showTMInfo();
+}
+function fillOrigins(){
+  if(!HUBS.some(h=>normTM(h)===state.planOrigin)) state.planOrigin='';
+  $('originSel').innerHTML='<option value="">All hubs</option>'+HUBS.map(h=>'<option value="'+esc(normTM(h))+'">'+esc(h)+'</option>').join('');
+  $('originSel').value=state.planOrigin;
+}
+function showTMInfo(){
+  const lanes=new Set(); state.tm.forEach(e=>e.cands.forEach(c=>lanes.add(c.lane)));
+  $('tmInfo').innerHTML = state.tm.size ? '<b>'+esc(state.tmName)+'</b> · '+fmt(lanes.size,0)+' lanes · '+fmt(state.tmOrigins.length,0)+' origins · '+fmt(state.tm.size,0)+' destinations'
+    + (state.tmFleet.size ? ' · Fleet Type for '+fmt(state.tmFleet.size,0)+' lanes'
+       : state.tmFleetCol===false ? ' <span class="tag miss">no Fleet Type / Vehicle Type column in this file</span>'
+       : ' <span class="tag miss">Fleet Type not saved — upload this file again</span>') : '';
+  $('tmBtn').textContent = 'Transportation master sheet' + (state.tm.size ? ' ✓' : '');
+}
+async function handleTMFile(file){
+  $('tmErr').textContent=''; $('tmInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(!rows.length) throw new Error('This file is empty.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const di=h.indexOf('destination'), li=h.indexOf('lane code'), loi=h.indexOf('lane origin'), fti=['fleet type','vehicle type','fleet','vehicle'].map(x=>h.indexOf(x)).find(i=>i>=0)??-1;
+    const miss=[di<0?'"Destination"':'', li<0?'"Lane Code"':''].filter(Boolean);
+    if(miss.length) throw new Error('This does not look like a transportation master: missing '+miss.join(' and ')+' column'+(miss.length>1?'s':'')+' in the first row.');
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const m=new Map(), origins=new Map(), fleets=new Map(); let used=0, skipped=0;
+    rows.slice(1).forEach((r,idx)=>{
+      const dest=String(r[di]??'').trim(), lane=String(r[li]??'').trim();
+      if(!dest||!lane){ skipped++; return; }
+      let od=loi>=0?String(r[loi]??'').trim():'';
+      if(!od) od=lane.split(/\s*-\s*/)[0].trim();
+      const o=normTM(od); if(!origins.has(o)) origins.set(o,od);
+      const k=normTM(dest); let e=m.get(k); if(!e){ e={dest,cands:[]}; m.set(k,e); }
+      let c=e.cands.find(x=>x.lane===lane); if(!c){ c={lane,o,n:0,i:idx}; e.cands.push(c); }
+      c.n++; used++;
+      if(fti>=0){ const ft=String(r[fti]??'').trim(); if(ft){ const lk=normTM(lane); let f=fleets.get(lk); if(!f){ f=new Map(); fleets.set(lk,f); } f.set(ft,(f.get(ft)||0)+1); } }
+    });
+    if(!m.size) throw new Error('No rows with both a Destination and a Lane Code were found.');
+    state.tm=m; state.tmName=file.name;
+    state.tmFleetCol = fti>=0;
+    /* one Fleet Type per lane: the most frequent; first listed on a tie */
+    state.tmFleet=new Map([...fleets.entries()].map(([lane,f])=>{ let best='',bn=-1; f.forEach((n,ft)=>{ if(n>bn){best=ft;bn=n;} }); return [lane,{fleet:best,multi:f.size>1,all:[...f.keys()]}]; }));
+    state.tmOrigins=[...origins.entries()].sort((a,b)=>a[1].localeCompare(b[1],undefined,{sensitivity:'base'}));
+    fillOrigins(); saveTM(); showTMInfo();
+    if(skipped) $('tmInfo').innerHTML+=' <span class="muted">· '+fmt(skipped,0)+' rows skipped (blank Destination or Lane Code)</span>';
+    if(state.data){ if(state.nlIdx>=0) state.groupIdx=-1; fillSelects(); recompute(); }
+    computeLH(); computeWH(); computeFO(); renderLaneView();
+  }catch(e){ showTMInfo(); $('tmErr').textContent=e.message+(state.tm.size?' Your previously saved master is still in use.':''); }
+}
+$('tmBtn').onclick=()=>$('tmPanel').classList.toggle('hidden');
+$('tmClose').onclick=()=>$('tmPanel').classList.add('hidden');
+wireDrop('tmDrop','tmFile',handleTMFile);
+/* ---------- vehicle capacity ---------- */
+const VC_KEY='volumetricPlanner.vc.v1';
+const normFleet = s => String(s==null?'':s).replace(/[_\s]+/g,' ').trim().toLowerCase();
+function saveVC(){
+  try{ localStorage.setItem(VC_KEY, JSON.stringify({name:state.vcName, list:[...state.vc.entries()]})); }
+  catch(e){ $('vcErr').textContent='Loaded, but this browser could not save the capacity table for next time.'; }
+}
+function showVCInfo(){
+  $('vcInfo').innerHTML = state.vc.size ? '<b>'+esc(state.vcName)+'</b> · '+fmt(state.vc.size,0)+' fleet types loaded' : '';
+  $('vcBtn').textContent = 'Vehicle capacity sheet' + (state.vc.size ? ' ✓' : '');
+}
+try{ const raw=localStorage.getItem(VC_KEY); if(raw){ const o=JSON.parse(raw); state.vc=new Map(o.list||[]); state.vcName=o.name||''; } }catch(e){}
+showVCInfo();
+async function handleVCFile(file){
+  $('vcErr').textContent=''; $('vcInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const fi=h.indexOf('fleet type'), ci=h.indexOf('capacity');
+    const miss=[fi<0?'"Fleet Type"':'', ci<0?'"Capacity"':''].filter(Boolean);
+    if(miss.length) throw new Error('This does not look like a vehicle capacity file: missing '+miss.join(' and ')+' column'+(miss.length>1?'s':'')+'.');
+    const m=new Map(); let bad=0;
+    rows.slice(1).forEach(r=>{
+      const f=String(r[fi]??'').trim(), c=toNum(r[ci]);
+      if(!f) return;
+      if(isNaN(c)){ bad++; return; }
+      m.set(normFleet(f), {fleet:f, capacity:c});
+    });
+    if(!m.size) throw new Error('No fleet types with a numeric capacity were found.');
+    state.vc=m; state.vcName=file.name; saveVC(); showVCInfo(); renderLaneView();
+    if(bad) $('vcInfo').innerHTML+=' <span class="muted">· '+fmt(bad,0)+' rows skipped (capacity not a number)</span>';
+  }catch(e){ showVCInfo(); $('vcErr').textContent=e.message+(state.vc.size?' Your previously saved table is still in use.':''); }
+}
+$('ccBtn').onclick=()=>{ const p=$('ccPanel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth',block:'start'}); };
+$('ccClose').onclick=()=>$('ccPanel').classList.add('hidden');
+$('vcBtn').onclick=()=>{ const p=$('vcPanel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth',block:'start'}); };
+$('vcClose').onclick=()=>$('vcPanel').classList.add('hidden');
+wireDrop('vcDrop','vcFile',handleVCFile);
+
+/* ---------- route mapping sheet (IndexedDB: too big for localStorage) ---------- */
+function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('volumetricPlanner',1); r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function kvSet(key,val){ const db=await idb(); return new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(val,key); t.oncomplete=()=>{db.close();res();}; t.onerror=()=>{db.close();rej(t.error);}; }); }
+async function kvGet(key){ const db=await idb(); return new Promise((res,rej)=>{ const q=db.transaction('kv').objectStore('kv').get(key); q.onsuccess=()=>{db.close();res(q.result);}; q.onerror=()=>{db.close();rej(q.error);}; }); }
+function showRMInfo(){
+  $('rmInfo').innerHTML = state.rm.size ? '<b>'+esc(state.rmName)+'</b> · '+fmt(state.rm.size,0)+' OD pairs loaded' : '';
+  $('rmBtn').textContent = 'Route mapping sheet' + (state.rm.size ? ' ✓' : '');
+}
+(async()=>{
+  try{ const o=await kvGet('route'); if(o){
+    state.rm=new Map(o.list||[]); state.rmName=o.name||'';
+    state.rmOD=o.od ? new Map(o.od) : new Map([...state.rm.values()].map(v=>[normTM(v[2]+'-'+v[3]), v[0]]));
+    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH(); computeFO();
+  } }catch(e){}
+  showRMInfo();
+})();
+async function handleRMFile(file){
+  $('rmErr').textContent=''; $('rmInfo').textContent='Reading '+file.name+' (large files take a moment)…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const h=rows[0].map(x=>String(x).trim().toLowerCase());
+    const need={od:h.indexOf('od pair'),origin:h.indexOf('origin_dc'),dest:h.indexOf('destination_dc'),next:h.indexOf('next location')};
+    const miss=Object.keys(need).filter(k=>need[k]<0);
+    if(miss.length) throw new Error('This does not look like a route mapping: missing column'+(miss.length>1?'s ':' ')+miss.map(x=>({od:'"OD Pair"',origin:'"origin_dc"',dest:'"destination_dc"',next:'"Next Location"'})[x]).join(', ')+'.');
+    const viaIdx=h.map((x,i)=>/^via\d+$/.test(x)?i:-1).filter(i=>i>=0);
+    const m=new Map(), od=new Map();
+    rows.slice(1).forEach(r=>{
+      const odv=String(r[need.od]??'').trim(), nx=String(r[need.next]??'').trim();
+      if(odv && nx && !od.has(normTM(odv))) od.set(normTM(odv), nx);
+      const o=String(r[need.origin]??'').trim(), d=String(r[need.dest]??'').trim();
+      if(!o||!d) return;
+      const vias=viaIdx.map(i=>String(r[i]??'').trim()).filter(Boolean);
+      const k=normTM(o)+'|'+normTM(d);
+      if(!m.has(k)) m.set(k,[String(r[need.next]??'').trim(), vias.join(' > '), o, d]);
+    });
+    if(!m.size) throw new Error('No origin and destination pairs found.');
+    state.rm=m; state.rmOD=od; state.rmName=file.name;
+    await kvSet('route',{name:file.name,list:[...m.entries()],od:[...od.entries()]});
+    showRMInfo(); if(state.data) recompute(); computeLH(); computeWH(); computeFO();
+  }catch(e){ showRMInfo(); $('rmErr').textContent=e.message+(state.rm.size?' Your previously saved mapping is still in use.':''); }
+}
+$('rmBtn').onclick=()=>$('rmPanel').classList.toggle('hidden');
+$('rmClose').onclick=()=>$('rmPanel').classList.add('hidden');
+wireDrop('rmDrop','rmFile',handleRMFile);
+/* ---------- LH Intransit ----------
+   OD Pair  = Origin hub (top dropdown) + "-" + Shipment_Destination_dc
+   Next Loc = route mapping "Next Location" for that OD Pair, else Shipment_Destination_dc
+   Columns are found by header name, so column order can change. */
+const findCol=(headers,name)=>headers.findIndex(h=>String(h).trim().toLowerCase()===name.toLowerCase());
+/* Two LH Intransit sources share all logic; only the destination and client columns differ. */
+const LH_SRC={
+  A:{label:'Ecom DC Floor Pendency', dest:'Shipment_Destination_dc', client:'Client', info:'lhInfo', err:'lhErr'},
+  B:{label:'LH Incoming Vehicle Visibility Dashboard', dest:'Shipment_Final_Destination_dc', client:'client_name', info:'lhInfoB', err:'lhErrB'}
+};
+state.lhSets={};
+function showLHInfo(key){
+  const S=LH_SRC[key], L=state.lhSets[key];
+  if(!L){ $(S.info).textContent=''; return; }
+  $(S.info).innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
+    +(findCol(L.headers,S.client)<0?' · <span class="tag def">no '+esc(S.client)+' column, coefficient 1 used</span>':'')
+    +' · <button class="linkbtn" data-lhremove="'+key+'">Remove</button>';
+  $(S.info).querySelector('[data-lhremove]').onclick=()=>{ delete state.lhSets[key]; showLHInfo(key); computeLH(); computeWH(); computeFO(); };
+}
+async function handleLHFile(file,key){
+  const S=LH_SRC[key];
+  $(S.err).textContent=''; $(S.info).textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
+    if(findCol(headers,S.dest)<0) throw new Error('Could not find the "'+S.dest+'" column in this file.');
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.lhSets[key]={name:file.name,headers,rows:body,key};
+    showLHInfo(key); computeLH(); computeWH(); computeFO();
+  }catch(e){ showLHInfo(key); $(S.err).textContent=e.message+(state.lhSets[key]?' The previous file is still in use.':''); }
+}
+function hubDisplay(){ return HUBS.find(h=>normTM(h)===state.planOrigin)||''; }
+/* Same rules for each source; only its destination and client columns differ. */
+function computeLHSet(L,hub){
+  const S=LH_SRC[L.key], n=L.rows.length;
+  const di=findCol(L.headers,S.dest), ci=findCol(L.headers,S.client);
+  L.od=new Array(n); L.next=new Array(n); L.src=new Array(n); L.coef=new Array(n); L.res=new Array(n);
+  let hit=0, fall=0;
+  for(let i=0;i<n;i++){
+    const dest=String(L.rows[i][di]??'').trim();
+    L.od[i] = (hub && dest) ? hub+'-'+dest : '';
+    const nx = L.od[i] ? state.rmOD.get(normTM(L.od[i])) : undefined;
+    if(nx){ L.next[i]=nx; L.src[i]='route mapping'; hit++; }
+    else { L.next[i]=dest; L.src[i]=dest?'fallback':''; if(dest) fall++; }
+    L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
+    L.res[i]=resolveLane(L.next[i], hub);
+  }
+  return {hit,fall};
+}
+/* Combine the uploaded sources (A, B or both) into one view; columns are matched by header name. */
+function computeLH(){
+  const keys=['A','B'].filter(k=>state.lhSets[k]);
+  if(!keys.length){ state.lh=null; $('lhResults').classList.add('hidden'); renderLaneView(); return; }
+  const hub=hubDisplay(); let hit=0, fall=0;
+  const sets=keys.map(k=>{ const L=state.lhSets[k]; const r=computeLHSet(L,hub); hit+=r.hit; fall+=r.fall; return L; });
+  let C;
+  if(sets.length===1){ C=Object.assign({},sets[0]); C.from=sets[0].rows.map(()=>sets[0].key); }
+  else {
+    const headers=[], seen=new Map();
+    sets.forEach(L=>L.headers.forEach(h=>{ const k=h.toLowerCase(); if(!seen.has(k)){ seen.set(k,headers.length); headers.push(h); } }));
+    C={name:'lh_intransit_A_B', headers, rows:[], od:[], next:[], src:[], coef:[], res:[], from:[], key:'AB'};
+    sets.forEach(L=>{
+      const map=L.headers.map(h=>seen.get(h.toLowerCase()));
+      for(let i=0;i<L.rows.length;i++){
+        const r=new Array(headers.length).fill(''); map.forEach((t,j)=>{ if(r[t]==='') r[t]=L.rows[i][j]; });
+        C.rows.push(r); C.od.push(L.od[i]); C.next.push(L.next[i]); C.src.push(L.src[i]); C.coef.push(L.coef[i]); C.res.push(L.res[i]); C.from.push(L.key);
+      }
+    });
+  }
+  state.lh=C;
+  const dests=keys.map(k=>LH_SRC[k].dest).join(' / ');
+  $('lhResults').classList.remove('hidden');
+  $('lhRows').textContent=fmt(C.rows.length,0); $('lhHit').textContent=fmt(hit,0); $('lhFall').textContent=fmt(fall,0);
+  $('lhFallBox').classList.toggle('warn',fall>0);
+  $('lhFallLbl').textContent='Fallback to '+dests;
+  $('lhSrcNote').textContent='· '+keys.map(k=>k+': '+LH_SRC[k].label+' ('+fmt(state.lhSets[k].rows.length,0)+' rows)').join(' + ');
+  let note='';
+  if(!hub) note='Select an Origin hub at the top to build the OD Pair. Until then, Next Loc uses '+dests+'.';
+  else if(!state.rmOD.size) note='Upload the route mapping sheet to look up Next Location. Until then, Next Loc uses '+dests+'.';
+  else note='OD Pair = '+hub+'-'+dests+'. Next Loc comes from the route mapping where the OD Pair matches, otherwise '+dests+'.';
+  $('lhNote').textContent=note;
+  renderLHSummary(); renderLHLanes(); renderLHPreview(); renderLaneView();
+}
+function renderLHSummary(){
+  const L=state.lh, g=new Map();
+  L.next.forEach((n,i)=>{ const k=n||'(blank)'; const e=g.get(k)||{n:0,r:0,f:0}; e.n++; if(L.src[i]==='route mapping') e.r++; else if(L.src[i]==='fallback') e.f++; g.set(k,e); });
+  $('lhNextN').textContent=fmt(g.size,0);
+  const q=norm($('lhSearch').value);
+  const list=[...g.entries()].filter(([k])=>!q||norm(disp(k)).includes(q)).sort((a,b)=>b[1].n-a[1].n);
+  $('lhSumBody').innerHTML=list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="num"><b>'+fmt(e.n,0)+'</b></td><td class="num">'+fmt(e.r,0)+'</td><td class="num">'+fmt(e.f,0)+'</td></tr>').join('')
+    + '<tr><td><b>'+(q?'Filtered total':'Grand total')+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].r,0),0)+'</td><td class="num">'+fmt(list.reduce((a,x)=>a+x[1].f,0),0)+'</td></tr>';
+}
+function renderLHLanes(){
+  const L=state.lh, lanes=new Map(), ne=new Map(); let eligVol=0, neN=0, neV=0;
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], v=L.coef[i].c, nl=L.next[i]||'(blank)';
+    if(rs.status==='ne'){ neN++; if(v!=null) neV+=v; const e=ne.get(normTM(nl))||{name:nl,n:0,vol:0}; e.n++; if(v!=null) e.vol+=v; ne.set(normTM(nl),e); continue; }
+    const lane = rs.status==='hub' ? rs.lane : rs.lane;
+    const e=lanes.get(lane)||{n:0,vol:0,dests:new Map()}; e.n++; if(v!=null){ e.vol+=v; eligVol+=v; }
+    if(!e.dests.has(normTM(nl))) e.dests.set(normTM(nl), disp(nl)); lanes.set(lane,e);
+  }
+  const hasLanes=state.tm.size>0;
+  $('lhVol').textContent=fmt(eligVol);
+  const list=[...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol);
+  $('lhLaneBody').innerHTML = list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="wrapcell">'+esc([...e.dests.values()].sort().join(', '))+'</td><td class="num">'+fmt(e.n,0)+'</td><td class="num"><b>'+fmt(e.vol)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num"><b>'+fmt(eligVol)+'</b></td></tr>';
+  const neL=[...ne.values()].sort((a,b)=>b.n-a.n);
+  $('lhNEBody').innerHTML = neL.length ? neL.map(x=>'<tr><td>'+esc(disp(x.name))+'</td><td class="num">'+fmt(x.n,0)+'</td><td class="num">'+fmt(x.vol)+'</td></tr>').join('') : '<tr><td colspan="3" class="muted">None.</td></tr>';
+  $('lhNECount').textContent='· '+fmt(neN,0)+' rows · volumetric '+fmt(neV);
+  $('lhLaneNote').textContent = (hasLanes ? '' : 'Upload the transportation master to see lanes. ')
+    + 'Each row adds its Client coefficient (same rules as Floor pendency) to the lane of its Next Loc'+(state.planOrigin?' for the selected hub.':'.');
+}
+/* ---------- Warehouse Pendency ----------
+   Third source. Client = client_name (coefficient rules as Floor pendency).
+   Lane = destination_dc matched to the transportation master "destination" column
+   (same lane rules and origin-hub filter as the other sources). No route mapping step. */
+const WH_DEST='destination_dc', WH_CLIENT='client_name';
+function showWHInfo(){
+  const L=state.wh;
+  if(!L){ $('whInfo').textContent=''; return; }
+  $('whInfo').innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
+    +(findCol(L.headers,WH_CLIENT)<0?' · <span class="tag def">no client_name column, coefficient 1 used</span>':'')
+    +' · <button class="linkbtn" id="whRemove">Remove</button>';
+  $('whRemove').onclick=()=>{ state.wh=null; $('whErr').textContent=''; showWHInfo(); computeWH(); computeFO(); };
+}
+async function handleWHFile(file){
+  $('whErr').textContent=''; $('whInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
+    if(findCol(headers,WH_DEST)<0) throw new Error('Could not find the "'+WH_DEST+'" column in this file.');
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.wh={name:file.name,headers,rows:body};
+    showWHInfo(); computeWH(); computeFO();
+  }catch(e){ showWHInfo(); $('whErr').textContent=e.message+(state.wh?' The previous file is still in use.':''); }
+}
+function computeWH(){
+  const L=state.wh;
+  if(!L){ $('whResults').classList.add('hidden'); renderLaneView(); return; }
+  const hub=hubDisplay(), n=L.rows.length;
+  const di=findCol(L.headers,WH_DEST), ci=findCol(L.headers,WH_CLIENT);
+  L.dest=new Array(n); L.coef=new Array(n); L.res=new Array(n);
+  let elig=0, neN=0, vol=0;
+  for(let i=0;i<n;i++){
+    const d=String(L.rows[i][di]??'').trim();
+    L.dest[i]=d;
+    L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
+    L.res[i]=resolveLane(d,'');
+    if(L.res[i].status==='ne') neN++; else { elig++; if(L.coef[i].c!=null) vol+=L.coef[i].c; }
+  }
+  $('whResults').classList.remove('hidden');
+  $('whRows').textContent=fmt(n,0); $('whElig').textContent=fmt(elig,0); $('whNE').textContent=fmt(neN,0); $('whVol').textContent=fmt(vol);
+  $('whNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top to limit lanes to that hub. ')
+    +'Lane = destination_dc matched to the transportation master "destination" column. Client coefficient from client_name.';
+  renderWHLanes(); renderWHPreview(); renderLaneView();
+}
+function renderWHLanes(){
+  const L=state.wh, lanes=new Map(), ne=new Map();
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], v=L.coef[i].c, d=L.dest[i]||'(blank)';
+    if(rs.status==='ne'){ const e=ne.get(normTM(d))||{name:d,n:0,vol:0}; e.n++; if(v!=null) e.vol+=v; ne.set(normTM(d),e); continue; }
+    const e=lanes.get(rs.lane)||{n:0,vol:0,dests:new Map()}; e.n++; if(v!=null) e.vol+=v;
+    if(!e.dests.has(normTM(d))) e.dests.set(normTM(d), disp(d)); lanes.set(rs.lane,e);
+  }
+  const list=[...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol);
+  $('whLaneBody').innerHTML = list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="wrapcell">'+esc([...e.dests.values()].sort().join(', '))+'</td><td class="num">'+fmt(e.n,0)+'</td><td class="num"><b>'+fmt(e.vol)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].vol,0))+'</b></td></tr>';
+  const neL=[...ne.values()].sort((a,b)=>b.n-a.n);
+  $('whNEBody').innerHTML = neL.length ? neL.map(x=>'<tr><td>'+esc(disp(x.name))+'</td><td class="num">'+fmt(x.n,0)+'</td><td class="num">'+fmt(x.vol)+'</td></tr>').join('') : '<tr><td colspan="3" class="muted">None.</td></tr>';
+  $('whNECount').textContent='· '+fmt(neL.reduce((a,x)=>a+x.n,0),0)+' rows';
+}
+function renderWHPreview(){
+  const L=state.wh; const want=['Awb_number',WH_CLIENT,WH_DEST];
+  const cols=want.map(w=>findCol(L.headers,w)).filter(i=>i>=0);
+  const N=Math.min(200,L.rows.length);
+  $('whPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+3)+' columns';
+  $('whPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th class="num">volumetric_coeff</th><th>Lane Code</th><th>Lane status</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++){
+    const rs=L.res[r], c=L.coef[r];
+    html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ne'?'–':esc(rs.lane))+'</td><td>'+(rs.status==='ne'?'<span class="tag miss">not eligible</span>':'<span class="tag ok">eligible</span>')+'</td></tr>';
+  }
+  $('whPrevBody').innerHTML=html;
+}
+$('whExport').onclick=()=>{
+  const L=state.wh; if(!L) return;
+  const lines=[L.headers.concat(['volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], c=L.coef[i];
+    lines.push(L.rows[i].concat([c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+  }
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+};
+$('whLaneExport').onclick=()=>{
+  const L=state.wh; if(!L) return;
+  const lanes=new Map();
+  for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.dest[i])); lanes.set(rs.lane,e); }
+  const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
+  download('warehouse_pendency_lanes_'+stamp()+'.csv',lines);
+};
+wireDrop('whDrop','whFile',handleWHFile);
+/* ---------- FM Load ----------
+   Client = client (coefficient rules as Floor pendency).
+   Lane = Destination_dc matched to the transportation master "destination" column (same as Warehouse Pendency).
+   Only rows with origin_dc = origin_bagging_dc are processed; all other rows are excluded before any calculation. */
+const FO_LABEL='FM Load', FO_DEST='Destination_dc', FO_CLIENT='client', FO_ORIG='origin_dc', FO_BAG='origin_bagging_dc';
+function showFOInfo(){
+  const L=state.fo;
+  if(!L){ $('foInfo').textContent=''; return; }
+  $('foInfo').innerHTML='<b>'+esc(L.name)+'</b> · '+fmt(L.rows.length,0)+' rows · '+L.headers.length+' columns'
+    +(findCol(L.headers,FO_CLIENT)<0?' · <span class="tag def">no client column, coefficient 1 used</span>':'')
+    +' · <button class="linkbtn" id="foRemove">Remove</button>';
+  $('foRemove').onclick=()=>{ state.fo=null; $('foErr').textContent=''; showFOInfo(); computeFO(); };
+}
+async function handleFOFile(file){
+  $('foErr').textContent=''; $('foInfo').textContent='Reading '+file.name+'…';
+  try{
+    const rows=await readFile(file);
+    if(rows.length<2) throw new Error('No data rows found under the header.');
+    const headers=rows[0].map(h=>String(h).trim()); const width=headers.length;
+    [FO_DEST,FO_CLIENT,FO_ORIG,FO_BAG].forEach(c=>{ if(findCol(headers,c)<0) throw new Error('Could not find the "'+c+'" column in this file.'); });
+    const body=rows.slice(1).map(r=>{ if(r.length<width){ r=r.slice(); while(r.length<width) r.push(''); } return r; });
+    state.fo={name:file.name,headers,rows:body};
+    showFOInfo(); computeFO();
+  }catch(e){ showFOInfo(); $('foErr').textContent=e.message+(state.fo?' The previous file is still in use.':''); }
+}
+function computeFO(){
+  const L=state.fo;
+  if(!L){ $('foResults').classList.add('hidden'); renderLaneView(); return; }
+  const hub=hubDisplay(), n=L.rows.length;
+  const di=findCol(L.headers,FO_DEST), ci=findCol(L.headers,FO_CLIENT), oi=findCol(L.headers,FO_ORIG), bi=findCol(L.headers,FO_BAG);
+  L.dest=new Array(n); L.coef=new Array(n); L.res=new Array(n);
+  let elig=0, neN=0, misN=0, vol=0;
+  for(let i=0;i<n;i++){
+    const d=String(L.rows[i][di]??'').trim();
+    L.dest[i]=d;
+    const o=normTM(L.rows[i][oi]), b=normTM(L.rows[i][bi]);
+    if(!state.planOrigin || o!==state.planOrigin || b!==state.planOrigin){ L.res[i]={status:'mismatch'}; L.coef[i]={c:null,src:'excluded'}; misN++; continue; }
+    L.coef[i]=coeffFor(ci>=0?L.rows[i][ci]:'');
+    L.res[i]=resolveLane(d,'');
+    if(L.res[i].status==='ne') neN++; else { elig++; if(L.coef[i].c!=null) vol+=L.coef[i].c; }
+  }
+  $('foResults').classList.remove('hidden');
+  $('foRows').textContent=fmt(n,0); $('foElig').textContent=fmt(elig,0); $('foNE').textContent=fmt(neN,0); $('foVol').textContent=fmt(vol);
+  $('foNote').textContent=(hub ? 'Lanes for the selected origin hub. ' : 'Select an Origin hub at the top. Until then, no rows are processed. ')
+    +'Only rows where origin_dc = origin_bagging_dc = the selected origin hub are processed. Lane = Destination_dc matched to the transportation master "destination" column. Client coefficient from client.';
+  renderFOLanes(); renderFOPreview(); renderLaneView();
+}
+function renderFOLanes(){
+  const L=state.fo, lanes=new Map(), ne=new Map();
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i]; if(rs.status==='mismatch') continue;
+    const v=L.coef[i].c, d=L.dest[i]||'(blank)';
+    if(rs.status==='ne'){ const e=ne.get(normTM(d))||{name:d,n:0,vol:0}; e.n++; if(v!=null) e.vol+=v; ne.set(normTM(d),e); continue; }
+    const e=lanes.get(rs.lane)||{n:0,vol:0,dests:new Map()}; e.n++; if(v!=null) e.vol+=v;
+    if(!e.dests.has(normTM(d))) e.dests.set(normTM(d), disp(d)); lanes.set(rs.lane,e);
+  }
+  const list=[...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol);
+  $('foLaneBody').innerHTML = list.map(([k,e])=>'<tr><td>'+esc(disp(k))+'</td><td class="wrapcell">'+esc([...e.dests.values()].sort().join(', '))+'</td><td class="num">'+fmt(e.n,0)+'</td><td class="num"><b>'+fmt(e.vol)+'</b></td></tr>').join('')
+    + '<tr><td><b>Grand total</b></td><td></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].n,0),0)+'</b></td><td class="num"><b>'+fmt(list.reduce((a,x)=>a+x[1].vol,0))+'</b></td></tr>';
+  const neL=[...ne.values()].sort((a,b)=>b.n-a.n);
+  $('foNEBody').innerHTML = neL.length ? neL.map(x=>'<tr><td>'+esc(disp(x.name))+'</td><td class="num">'+fmt(x.n,0)+'</td><td class="num">'+fmt(x.vol)+'</td></tr>').join('') : '<tr><td colspan="3" class="muted">None.</td></tr>';
+  $('foNECount').textContent='· '+fmt(neL.reduce((a,x)=>a+x.n,0),0)+' rows';
+}
+function renderFOPreview(){
+  const L=state.fo; const want=['Awb_number',FO_CLIENT,FO_DEST,FO_ORIG,FO_BAG];
+  const cols=[...new Set(want.map(w=>findCol(L.headers,w)).filter(i=>i>=0))];
+  const N=Math.min(200,L.rows.length);
+  $('foPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+3)+' columns';
+  $('foPrevHead').innerHTML='<tr>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th class="num">volumetric_coeff</th><th>Lane Code</th><th>Status</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++){
+    const rs=L.res[r], c=L.coef[r];
+    const st = rs.status==='mismatch' ? '<span class="tag miss">origin mismatch</span>' : rs.status==='ne' ? '<span class="tag miss">not eligible</span>' : '<span class="tag ok">eligible</span>';
+    html+='<tr>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ok'||rs.status==='hub'?esc(rs.lane):'–')+'</td><td>'+st+'</td></tr>';
+  }
+  $('foPrevBody').innerHTML=html;
+}
+$('foExport').onclick=()=>{
+  const L=state.fo; if(!L) return;
+  const lines=[L.headers.concat(['volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], c=L.coef[i];
+    lines.push(L.rows[i].concat([c.c==null?'':c.c,c.src,rs.status==='ok'||rs.status==='hub'?rs.lane:'',rs.status==='mismatch'?'origin mismatch':rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+  }
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+};
+$('foLaneExport').onclick=()=>{
+  const L=state.fo; if(!L) return;
+  const lanes=new Map();
+  for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne'||rs.status==='mismatch') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.dest[i])); lanes.set(rs.lane,e); }
+  const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
+  download('fm_load_lanes_'+stamp()+'.csv',lines);
+};
+wireDrop('foDrop','foFile',handleFOFile);
+/* Duplicate AWB removal across sources. Only rows that would be counted in a lane are considered.
+   Order of priority: Floor pendency > LH Intransit > Warehouse Pendency > FM Load; the first occurrence is kept. */
+const normAwb=v=>String(v==null?'':v).trim().toUpperCase().replace(/\s+/g,'');
+const findAwbIdx=h=>{ for(const c of ['awb_number','awb','awb no','awb_no']){ const i=findCol(h,c); if(i>=0) return i; } return -1; };
+function dupMasks(){
+  const seen=new Set(), out={F:[],H:[],W:[],X:[]}, cnt={F:0,H:0,W:0,X:0};
+  const srcs=[];
+  if(state.data && state.nlIdx>=0){
+    const {rows,headers}=state.data, ai=findAwbIdx(headers);
+    srcs.push(['F', rows.length, i=>{ const r=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:''); return r.status!=='ne' ? rows[i][ai] : null; }]);
+  }
+  if(state.lh){ const ai=findAwbIdx(state.lh.headers); srcs.push(['H', state.lh.rows.length, i=>state.lh.res[i].status!=='ne' ? state.lh.rows[i][ai] : null]); }
+  if(state.wh && state.wh.res){ const ai=findAwbIdx(state.wh.headers); srcs.push(['W', state.wh.rows.length, i=>state.wh.res[i].status!=='ne' ? state.wh.rows[i][ai] : null]); }
+  if(state.fo && state.fo.res){ const ai=findAwbIdx(state.fo.headers); srcs.push(['X', state.fo.rows.length, i=>(state.fo.res[i].status!=='ne' && state.fo.res[i].status!=='mismatch') ? state.fo.rows[i][ai] : null]); }
+  for(const [k,n,get] of srcs){
+    out[k]=new Array(n).fill(false);
+    for(let i=0;i<n;i++){
+      const v=get(i); if(v==null) continue;
+      const key=normAwb(v); if(!key) continue;
+      if(seen.has(key)){ out[k][i]=true; cnt[k]++; } else seen.add(key);
+    }
+  }
+  return {out, cnt};
+}
+/* Lane totals: per lane, the volumetric coefficients of all four sources are summed; AWB counts all four.
+   FM Load: only 80% of each lane's summed volume is counted; the other 20% is removed. */
+const FM_LANE_SHARE=0.8;
+function laneTotals(){
+  const F=new Map(), H=new Map(), W=new Map(), X=new Map();
+  const M=$('dedupeChk').checked ? dupMasks() : null; const dm=M?M.out:{F:[],H:[],W:[],X:[]}; state.dupCnt=M?M.cnt:{F:0,H:0,W:0,X:0};
+  const add=(map,k,v)=>{ const e=map.get(k)||{n:0,v:0}; e.n++; if(v!=null) e.v+=v; map.set(k,e); };
+  if(state.data && state.nlIdx>=0){
+    const {rows}=state.data;
+    for(let i=0;i<rows.length;i++){
+      if(dm.F[i]) continue;
+      const res=resolveLane(rows[i][state.nlIdx], state.locIdx>=0?rows[i][state.locIdx]:'');
+      if(res.status!=='ne') add(F,res.lane,coeffFor(rows[i][state.clientIdx]).c);
+    }
+  }
+  if(state.lh){
+    for(let i=0;i<state.lh.rows.length;i++){
+      if(dm.H[i]) continue;
+      const res=state.lh.res[i];
+      if(res.status!=='ne') add(H,res.lane,state.lh.coef[i].c);
+    }
+  }
+  if(state.wh && state.wh.res){
+    for(let i=0;i<state.wh.rows.length;i++){
+      if(dm.W[i]) continue;
+      const res=state.wh.res[i];
+      if(res.status!=='ne') add(W,res.lane,state.wh.coef[i].c);
+    }
+  }
+  if(state.fo && state.fo.res){
+    for(let i=0;i<state.fo.rows.length;i++){
+      if(dm.X[i]) continue;
+      const res=state.fo.res[i];
+      if(res.status!=='ne' && res.status!=='mismatch') add(X,res.lane,state.fo.coef[i].c);
+    }
+  }
+  const keys=[...new Set([...F.keys(),...H.keys(),...W.keys(),...X.keys()])].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
+  return keys.map(k=>{ const f=F.get(k)||{n:0,v:0}, h=H.get(k)||{n:0,v:0}, w=W.get(k)||{n:0,v:0}, x=X.get(k)||{n:0,v:0};
+    return {lane:k, fn:f.n, fv:f.v, hn:h.n, hv:h.v, wn:w.n, wv:w.v, xn:x.n, xv:x.v*FM_LANE_SHARE}; });
+}
+/* Lane -> Fleet Type (transportation master) -> Capacity (vehicle capacity sheet) */
+function laneCapacity(lane){
+  const f=state.tmFleet.get(normTM(lane));
+  if(!f || !f.fleet) return {fleet:'', capacity:null};
+  const v=state.vc.get(normFleet(f.fleet));
+  return {fleet:f.fleet, multi:f.multi, all:f.all, capacity: v ? v.capacity : null};
+}
+function renderLaneView(){
+  if(!state.data && !state.lh && !state.wh && !state.fo){ $('laneView').classList.add('hidden'); return; }
+  $('laneView').classList.remove('hidden');
+  const rows=laneTotals();
+  const sum=k=>rows.reduce((a,x)=>a+x[k],0);
+  $('laneBody').innerHTML = rows.map(x=>{
+    const cap=laneCapacity(x.lane), tc=x.fn+x.hn+x.wn+x.xn, tv=x.fv+x.hv+x.wv+x.xv;
+    let fleetCell, capCell, spillCell;
+    if(!cap.fleet){ fleetCell='<span class="tag miss">'+(state.tmFleet.size?'no fleet type':'re-upload master')+'</span>'; capCell='–'; spillCell='<td class="num muted">–</td>'; }
+    else {
+      fleetCell=esc(cap.fleet)+(cap.multi?' <span class="tag def" title="Lane has '+esc(cap.all.join(', '))+'">multiple</span>':'');
+      if(cap.capacity==null){ capCell='<span class="tag miss">no capacity</span>'; spillCell='<td class="num muted">–</td>'; }
+      else { const sp=tv-cap.capacity; capCell=fmt(cap.capacity,0); spillCell='<td class="num '+(sp>0?'spill-pos':sp<0?'spill-neg':'')+'">'+fmt(sp)+'</td>'; }
+    }
+    return '<tr><td>'+esc(disp(x.lane))+'</td><td class="num">'+fmt(x.fn,0)+'</td><td class="num">'+fmt(x.hn,0)+'</td><td class="num">'+fmt(x.wn,0)+'</td><td class="num">'+fmt(x.xn,0)+'</td><td class="num">'+fmt(x.fv)+'</td><td class="num">'+fmt(x.hv)+'</td><td class="num">'+fmt(x.wv)+'</td><td class="num">'+fmt(x.xv)+'</td><td class="num"><b>'+fmt(tc,0)+'</b></td><td class="num"><b>'+fmt(tv)+'</b></td><td>'+fleetCell+'</td><td class="num">'+capCell+'</td>'+spillCell+planCell(normTM(x.lane))+'</tr>';
+  }).join('')
+    + '<tr><td><b>Grand total</b></td><td class="num"><b>'+fmt(sum('fn'),0)+'</b></td><td class="num"><b>'+fmt(sum('hn'),0)+'</b></td><td class="num"><b>'+fmt(sum('wn'),0)+'</b></td><td class="num"><b>'+fmt(sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv'))+'</b></td><td class="num"><b>'+fmt(sum('hv'))+'</b></td><td class="num"><b>'+fmt(sum('wv'))+'</b></td><td class="num"><b>'+fmt(sum('xv'))+'</b></td><td class="num"><b>'+fmt(sum('fn')+sum('hn')+sum('wn')+sum('xn'),0)+'</b></td><td class="num"><b>'+fmt(sum('fv')+sum('hv')+sum('wv')+sum('xv'))+'</b></td><td></td><td></td><td></td><td></td></tr>';
+  $('laneNote').textContent = (state.planOrigin ? 'Lanes for the selected origin hub. ' : 'All lanes in the transportation master. ')
+    + 'Total AWB = number of shipments per lane (all sources). Sum of vol = sum of client volumetric coefficients per lane. Total volumetric = sum of all Sum of vol columns. Spillover = Total volumetric − Vehicle Capacity (red: over capacity, green: spare). Not-eligible shipments are excluded.'
+    + (state.tm.size && !state.tmFleet.size ? ' Your saved transportation master was uploaded before Fleet Type was read. Upload it again once to fill Fleet Type and Spillover.' : '')
+    + (state.vc.size ? '' : ' Upload the vehicle capacity sheet to calculate spillover.')
+    + (state.tm.size ? '' : ' Upload the transportation master to see lanes.')
+    + (state.dupCnt && $('dedupeChk').checked ? ' Duplicates removed (first occurrence kept, in order Floor, LH, Warehouse, FM Load): Floor '+fmt(state.dupCnt.F,0)+', LH '+fmt(state.dupCnt.H,0)+', Warehouse '+fmt(state.dupCnt.W,0)+', FM Load '+fmt(state.dupCnt.X,0)+'.' : '');
+}
+$('dedupeChk').onchange=()=>renderLaneView();
+/* Lane plan: Adhoc required / LH aligned (with the aligned vehicle), kept on this computer per lane. */
+const PLAN_KEY='downstreamPlanning.lanePlan.v1';
+state.lanePlan=(()=>{ try{ return JSON.parse(localStorage.getItem(PLAN_KEY)||'{}')||{}; }catch(e){ return {}; } })();
+function savePlan(){ try{ localStorage.setItem(PLAN_KEY, JSON.stringify(state.lanePlan)); }catch(e){} }
+function vehicleOptions(){ return [...new Set([...state.vc.values()].map(v=>v.fleet))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})); }
+function planCell(k){
+  const p=state.lanePlan[k]||{};
+  const opts=vehicleOptions();
+  return '<td class="plan" data-lane="'+esc(k)+'">'
+    +'<label class="inline tick"><input type="checkbox" data-k="adhoc"'+(p.adhoc?' checked':'')+'> Adhoc required</label>'
+    +'<label class="inline tick"><input type="checkbox" data-k="lh"'+(p.lh?' checked':'')+'> LH aligned</label>'
+    +(p.lh ? '<select data-k="veh" class="vehsel"><option value="">Select vehicle</option>'
+      + (opts.length ? opts.map(o=>'<option'+(o===p.veh?' selected':'')+'>'+esc(o)+'</option>').join('') : '')
+      + '</select>'+(opts.length?'':' <span class="muted" style="font-size:11px">upload vehicle capacity sheet</span>') : '')
+    +((state.lhStatus||{})[k]?'<div class="hint" style="margin-top:4px">LH: '+esc((state.lhStatus||{})[k])+'</div>':'')
+    +'</td>';
+}
+$('laneBody').addEventListener('change', e=>{
+  const td=e.target.closest('td.plan'); if(!td) return;
+  const k=td.dataset.lane, p=state.lanePlan[k]||{}, t=e.target.dataset.k;
+  if(t==='adhoc') p.adhoc=e.target.checked;
+  else if(t==='lh'){ p.lh=e.target.checked; if(!p.lh) p.veh=''; }
+  else if(t==='veh') p.veh=e.target.value;
+  state.lanePlan[k]=p; savePlan(); renderLaneView();
+});
+$('laneExport').onclick=()=>{
+  const rows=laneTotals();
+  const lines=['lane_code,awb_fwd_floor,awb_lh_intransit,awb_warehouse_pendency,awb_fm_load,sum_of_vol_fwd_floor,sum_of_vol_lh_intransit,sum_of_vol_warehouse_pendency,sum_of_vol_fm_load,total_awb,total_volumetric,fleet_type,vehicle_capacity,spillover,adhoc_required,lh_aligned,aligned_vehicle'];
+  rows.forEach(x=>{ const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv, p=state.lanePlan[normTM(x.lane)]||{};
+    lines.push([csvCell(disp(x.lane)),x.fn,x.hn,x.wn,x.xn,+x.fv.toFixed(4),+x.hv.toFixed(4),+x.wv.toFixed(4),+x.xv.toFixed(4),x.fn+x.hn+x.wn+x.xn,+tv.toFixed(4),csvCell(cap.fleet||''),cap.capacity==null?'':cap.capacity,cap.capacity==null?'':+(tv-cap.capacity).toFixed(4),p.adhoc?'yes':'no',p.lh?'yes':'no',csvCell(p.lh?(p.veh||''):'')].join(',')); });
+  download('lane_totals_'+stamp()+'.csv',lines);
+};
+/* ---------- Online workflow bridge ----------
+   Replaces the former Google Sheets block (SHEET_API, Save & Send, Refresh Approved Plan).
+   The Supabase code lives in assets/planner-online.js. It never calculates anything:
+   it only reads the lane rows below and writes the LH status back into the lane table. */
+state.lhStatus={};
+/* Same lane rows the Sheets workflow published; the per-source columns are added for the admin view. */
+function planRows(){
+  return laneTotals().map(x=>{
+    const cap=laneCapacity(x.lane), tv=x.fv+x.hv+x.wv+x.xv, p=state.lanePlan[normTM(x.lane)]||{};
+    return {lane:x.lane, total_awb:x.fn+x.hn+x.wn+x.xn, total_volumetric:+tv.toFixed(4), fleet_type:cap.fleet||'',
+      vehicle_capacity:cap.capacity==null?'':cap.capacity, spillover:cap.capacity==null?'':+(tv-cap.capacity).toFixed(4),
+      adhoc_required:p.adhoc?'yes':'no', dc_vehicle:p.lh?(p.veh||''):'',
+      lh_aligned:p.lh?'yes':'no',
+      awb_fwd_floor:x.fn, awb_lh_intransit:x.hn, awb_warehouse_pendency:x.wn, awb_fm_load:x.xn,
+      vol_fwd_floor:+x.fv.toFixed(4), vol_lh_intransit:+x.hv.toFixed(4), vol_warehouse_pendency:+x.wv.toFixed(4), vol_fm_load:+x.xv.toFixed(4)};
+  });
+}
+function renderLHPreview(){
+  const L=state.lh; const want=['Awb_number','Client','client_name','MM_destination','Shipment_Destination_dc','Shipment_Final_Destination_dc','Delivery_hub'];
+  const cols=[...new Set(want.map(w=>findCol(L.headers,w)).filter(i=>i>=0))];
+  const N=Math.min(200,L.rows.length);
+  $('lhPrevNote').textContent='first '+N+' of '+fmt(L.rows.length,0)+' rows · download for all '+(L.headers.length+7)+' columns';
+  $('lhPrevHead').innerHTML='<tr><th>LH source</th>'+cols.map(i=>'<th>'+esc(L.headers[i])+'</th>').join('')+'<th>OD Pair</th><th>Next Loc</th><th>Next Loc source</th><th class="num">volumetric_coeff</th><th>Lane Code</th></tr>';
+  let html='';
+  for(let r=0;r<N;r++){
+    const rs=L.res[r], c=L.coef[r];
+    html+='<tr><td>'+L.from[r]+'</td>'+cols.map(i=>'<td>'+esc(L.rows[r][i])+'</td>').join('')+'<td>'+esc(L.od[r])+'</td><td>'+esc(L.next[r])+'</td><td>'+(L.src[r]?'<span class="tag '+(L.src[r]==='route mapping'?'ok':'def')+'">'+L.src[r]+'</span>':'')+'</td>'
+      +'<td class="num">'+(c.c==null?'–':fmt(c.c,3))+'</td><td>'+(rs.status==='ne'?'<span class="tag miss">not eligible</span>':esc(rs.lane))+'</td></tr>';
+  }
+  $('lhPrevBody').innerHTML=html;
+}
+$('lhSearch').oninput=()=>{ if(state.lh&&state.lh.next) renderLHSummary(); };
+$('lhExport').onclick=()=>{
+  const L=state.lh; if(!L) return;
+  const lines=[['LH source'].concat(L.headers).concat(['OD Pair','Next Loc','volumetric_coeff','coeff_source','lane_code','lane_status']).map(csvCell).join(',')];
+  for(let i=0;i<L.rows.length;i++){
+    const rs=L.res[i], c=L.coef[i];
+    lines.push([L.from[i]].concat(L.rows[i]).concat([L.od[i],L.next[i],c.c==null?'':c.c,c.src,rs.status==='ne'?'':rs.lane,rs.status==='ne'?'not eligible':rs.status==='hub'?'origin hub':'eligible']).map(csvCell).join(','));
+  }
+  download(L.name.replace(/\.[^.]+$/,'')+'_with_lanes_'+stamp()+'.csv',lines);
+};
+$('lhLaneExport').onclick=()=>{
+  const L=state.lh; if(!L) return;
+  const lanes=new Map();
+  for(let i=0;i<L.rows.length;i++){ const rs=L.res[i]; if(rs.status==='ne') continue; const v=L.coef[i].c; const e=lanes.get(rs.lane)||{n:0,vol:0,d:new Set()}; e.n++; if(v!=null) e.vol+=v; e.d.add(disp(L.next[i])); lanes.set(rs.lane,e); }
+  const lines=['lane_code,destinations_included,count_of_awb_number,sum_of_volumetric_coeff'];
+  [...lanes.entries()].sort((a,b)=>b[1].vol-a[1].vol).forEach(([k,e])=>lines.push([csvCell(disp(k)),csvCell([...e.d].join(', ')),e.n,+e.vol.toFixed(4)].join(',')));
+  download('lh_intransit_'+L.key+'_lanes_'+stamp()+'.csv',lines);
+};
+wireDrop('lhDrop','lhFile',f=>handleLHFile(f,'A'));
+wireDrop('lhDropB','lhFileB',f=>handleLHFile(f,'B'));
+try{ state.planOrigin=localStorage.getItem(ORIGIN_KEY)||''; localStorage.removeItem('volumetricPlanner.hm.v1'); }catch(e){}
+loadCoeffs(); renderCoeffs(); loadTM(); fillOrigins();
+/* Read-only window for the online layer (plus two setters that reuse the planner's own render path). */
+window.DCPlanner={
+  hasData:()=>!!(state.data||state.lh||state.wh||state.fo),
+  planRows, vehicleOptions, hubDisplay,
+  getOrigin:()=>state.planOrigin,
+  setOrigin(v){ const s=$('originSel'); if(s.value===v) return; s.value=v; if(s.value===v) s.onchange(); },
+  getLanePlan:()=>JSON.parse(JSON.stringify(state.lanePlan||{})),
+  setLanePlan(p){ state.lanePlan=(p&&typeof p==='object')?JSON.parse(JSON.stringify(p)):{}; savePlan(); renderLaneView(); },
+  setLHStatus(m){ state.lhStatus=m||{}; renderLaneView(); },
+  normLane:normTM, dispLane:disp, fmt, esc
+};
+document.dispatchEvent(new CustomEvent('dcplanner:ready'));
+})();

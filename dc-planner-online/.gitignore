@@ -1,0 +1,4 @@
+.env
+public/config.js
+node_modules/
+tests/output/

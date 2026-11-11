@@ -1,0 +1,7 @@
+awb_number,client_name,location_name,next_location,region
+A1,ClientA,Kolkata DC,Malda DC,East
+A2,ClientB,Kolkata DC,Malda DC,East
+A3,ClientC,Kolkata DC,Siliguri DC,East
+A4,,Kolkata DC,Patna DC,East
+A5,ClientA,Kolkata DC,Unknown DC,East
+A6,ClientB,Kolkata DC,Ranchi DC,East
