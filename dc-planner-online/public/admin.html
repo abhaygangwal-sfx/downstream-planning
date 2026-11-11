@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" class="auth-pending">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · LH Approval · Downstream Planning</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div class="wrap">
+<div class="acctbar"><span class="muted" id="acctWho">Signing in…</span><a class="btn" href="planner.html">Planner view</a><button class="btn" id="acctOut">Sign out</button></div>
+  <header class="hero">
+    <div class="heroRow">
+    <div class="brandRow">
+      <div class="logoCard"><img src="assets/logo.png" alt="Logo"></div>
+      <div>
+      <h1>LH Approval · Admin dashboard</h1>
+      <p class="sub" style="margin:0">Review submitted lane plans, edit, comment, approve and publish.</p>
+      </div>
+    </div>
+    <div class="row heroBtns"><span class="badge" id="liveBadge">● Connecting…</span></div>
+    </div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi warn"><div class="l">Pending</div><div class="v" id="kPend">–</div></div>
+    <div class="kpi"><div class="l">Changes requested</div><div class="v" id="kChg">–</div></div>
+    <div class="kpi"><div class="l">Approved (not published)</div><div class="v" id="kAppr">–</div></div>
+    <div class="kpi"><div class="l">Published</div><div class="v" id="kPub">–</div></div>
+  </div>
+
+  <section class="panel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Submissions <span class="muted" id="listCount" style="font-weight:400;font-size:13px"></span></h2>
+      <div class="row">
+        <div class="filters" id="filters">
+          <button class="btn on" data-f="pending">Pending</button>
+          <button class="btn" data-f="changes_requested">Changes requested</button>
+          <button class="btn" data-f="approved">Approved</button>
+          <button class="btn" data-f="published">Published</button>
+          <button class="btn" data-f="rejected">Rejected</button>
+          <button class="btn" data-f="all">All</button>
+        </div>
+        <input type="text" id="listSearch" placeholder="Search plan, hub, name…" style="width:190px">
+      </div>
+    </div>
+    <div class="tablewrap" style="max-height:380px">
+      <table class="plain"><thead><tr><th>Plan</th><th>Origin hub</th><th>Plan date</th><th>Submitted by</th><th class="num">Lanes</th><th class="num">Version</th><th>Status</th><th>Submitted</th><th></th></tr></thead><tbody id="listBody"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="editor">
+    <div class="sectionhead">
+      <div>
+        <h2 style="margin:0" id="edTitle"></h2>
+        <p class="hint" style="margin:4px 0 0" id="edInfo"></p>
+      </div>
+      <div class="row"><button class="btn" id="edCsv">Download</button><button class="btn" id="edClose">Close</button></div>
+    </div>
+    <div class="kv" id="edKv"></div>
+    <div class="alert soft hidden" id="edAlert"><h3 id="edAlertT"></h3><div id="edAlertB"></div></div>
+    <div class="sectionhead" style="margin-top:4px">
+      <h3 class="sub" style="margin:0">Lanes <span class="muted" id="edChanged" style="font-weight:400"></span></h3>
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="edOnlyChanged"> Show changed lanes only</label>
+        <button class="btn" id="edCopyVeh">Copy DC vehicle into blank approved vehicle</button>
+        <button class="btn" id="edReset">Reset to original</button>
+      </div>
+    </div>
+    <p class="hint">Edit any value. Cells that differ from what the planner submitted are highlighted; hover a cell to see the original. Spillover = Total volumetric − Vehicle Capacity, recalculated as you edit. The planner's original stays saved separately.</p>
+    <datalist id="vehList"></datalist>
+    <div class="tablewrap" style="max-height:520px">
+      <table class="plain"><thead><tr><th>Lane</th><th class="num">Total AWB</th><th class="num">Total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th><th>Adhoc</th><th>LH aligned</th><th>DC vehicle</th><th>Approved vehicle</th><th class="num">Count</th><th>Remarks</th></tr></thead><tbody id="edBody"></tbody></table>
+    </div>
+    <div class="row" style="margin-top:14px" id="edActions">
+      <button class="btn" id="actSave">Save edits</button>
+      <button class="btn" id="actApprove">Approve</button>
+      <button class="btn primary" id="actApprovePub">Approve &amp; Publish</button>
+      <button class="btn hidden" id="actPublish">Publish</button>
+      <button class="btn hidden" id="actUnpublish">Unpublish</button>
+      <button class="btn" id="actChanges">Request changes</button>
+      <button class="btn danger" id="actReject">Reject</button>
+    </div>
+    <p class="hint" id="edMsg" style="margin:8px 0 0"></p>
+
+    <h3 class="sub">Comments</h3>
+    <div class="comments" id="edComments"></div>
+    <div style="margin-top:8px">
+      <textarea id="edCommentBody" placeholder="Comment for the planner (also used as the reason when you request changes or reject)…" maxlength="4000"></textarea>
+      <div class="row" style="margin-top:6px"><button class="btn" id="edCommentPost">Post comment</button></div>
+    </div>
+
+    <h3 class="sub">Submission history</h3>
+    <div class="tablewrap" style="max-height:200px"><table class="plain"><thead><tr><th class="num">Version</th><th>Submitted</th><th>Recorded name</th><th class="num">Lanes</th><th></th></tr></thead><tbody id="edHist"></tbody></table></div>
+  </section>
+</div>
+<script src="config.js"></script>
+<script type="module" src="assets/admin.js"></script>
+</body>
+</html>

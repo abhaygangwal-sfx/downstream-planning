@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en" class="auth-pending">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downstream Planning</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div class="wrap">
+<div class="acctbar" id="acctBar"><span class="muted" id="acctWho">Signing in…</span><a class="btn hidden" id="acctAdmin" href="admin.html">Admin dashboard</a><button class="btn" id="acctOut">Sign out</button></div>
+<div id="pageMain">
+  <header class="hero">
+    <div class="heroRow">
+    <div class="brandRow">
+      <div class="logoCard"><img src="assets/logo.png" alt="Shadowfax" height="48"></div>
+      <div>
+      <h1>Downstream Planning</h1>
+      </div>
+    </div>
+    <div class="row heroBtns"><label class="inline hubpick">Origin hub <select id="originSel"></select></label><button class="btn" id="ccBtn">Client coefficients sheet</button><button class="btn" id="rmBtn">Route mapping sheet</button><button class="btn" id="tmBtn">Transportation master sheet</button><button class="btn" id="vcBtn">Vehicle capacity sheet</button><span class="badge">● Calculations run in your browser · only the lane plan is shared</span></div>
+    </div>
+  </header>
+
+  <section class="panel hidden" id="tmPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Transportation master sheet</h2>
+      <button class="btn" id="tmClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Needs <b>Destination</b> and <b>Lane Code</b> columns; <b>Lane Origin</b> is used if present. Each next_location is matched to a Destination and its volumetric is added to that Lane Code. Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="tmDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="tmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="tmInfo"></div>
+    <div class="err" id="tmErr"></div>
+  </section>
+
+  <section class="panel hidden" id="ccPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Client coefficients sheet</h2>
+      <button class="btn" id="ccClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel with <b>Client</b> and <b>Coefficient</b> columns). Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="coeffDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="coeffFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="coeffInfo"></div>
+    <div class="err" id="coeffErr"></div>
+    <button class="btn" id="openCoeff" style="margin-top:10px">View coefficient table <span id="coeffBtnCount" class="muted"></span> →</button>
+  </section>
+
+  <section class="panel hidden" id="rmPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Route mapping sheet</h2>
+      <button class="btn" id="rmClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>OD Pair</b>, <b>origin_dc</b>, <b>Via1–Via6</b>, <b>destination_dc</b> and <b>Next Location</b>. Large files are kept in this browser's database. Upload again to replace it.</p>
+    <button class="drop" id="rmDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="rmFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="rmInfo"></div>
+    <div class="err" id="rmErr"></div>
+  </section>
+
+  <section class="panel hidden" id="vcPanel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Vehicle capacity sheet</h2>
+      <button class="btn" id="vcClose">Close</button>
+    </div>
+    <p class="hint">Upload once (CSV or Excel). Uses <b>Fleet Type</b> and <b>Capacity</b>. Fleet names are matched ignoring case, spaces and underscores. Saved on this computer; upload again to replace it.</p>
+    <button class="drop" id="vcDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="vcFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="vcInfo"></div>
+    <div class="err" id="vcErr"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2><span class="step">1</span> Floor pendency</h2>
+      <p class="hint">Upload the shipment export (CSV or Excel). The <b>client_name</b> column is matched to your client coefficients.</p>
+      <button class="drop" id="dataDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+      <input type="file" id="dataFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+      <div class="fileinfo" id="dataInfo"></div>
+      <div class="err" id="dataErr"></div>
+    </section>
+    <section class="panel">
+      <h2><span class="step">2</span> LH Intransit</h2>
+      <p class="hint">Upload one source or both (CSV or Excel). When both are uploaded, their rows are added together. Adds <b>OD Pair</b> (Origin hub + destination column) and <b>Next Loc</b> (route mapping's Next Location for that OD Pair, otherwise the destination column). Existing columns are kept as they are.</p>
+      <div class="lhopt">
+        <div class="lhpick"><b>A:</b> LH Intransit — Data from Ecom DC Floor Pendency</div>
+        <div class="muted lhcols">Destination: <b>Shipment_Destination_dc</b> · Client: <b>Client</b></div>
+        <button class="drop" id="lhDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+        <input type="file" id="lhFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+        <div class="fileinfo" id="lhInfo"></div>
+        <div class="err" id="lhErr"></div>
+      </div>
+      <div class="lhopt">
+        <div class="lhpick"><b>B:</b> LH Intransit — Data from LH Incoming Vehicle Visibility Dashboard</div>
+        <div class="muted lhcols">Destination: <b>Shipment_Final_Destination_dc</b> · Client: <b>client_name</b></div>
+        <button class="drop" id="lhDropB" type="button"><strong>Choose file</strong> or drop it here</button>
+        <input type="file" id="lhFileB" accept=".csv,.xlsx,.txt,.tsv" hidden>
+        <div class="fileinfo" id="lhInfoB"></div>
+        <div class="err" id="lhErrB"></div>
+      </div>
+    </section>
+  </div>
+
+
+
+  <section class="panel" style="margin-top:16px">
+    <h2><span class="step">3</span> Warehouse Pendency</h2>
+    <p class="hint">Upload the warehouse pendency export (CSV or Excel). <b>client_name</b> is matched to your client coefficients. <b>destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane. Lanes follow the selected origin hub.</p>
+    <button class="drop" id="whDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="whFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="whInfo"></div>
+    <div class="err" id="whErr"></div>
+  </section>
+
+  <section class="panel" style="margin-top:16px">
+    <h2><span class="step">4</span> FM Load</h2>
+    <p class="hint">Upload the export (CSV or Excel). Only rows where <b>origin_dc</b> and <b>origin_bagging_dc</b> both equal the <b>selected Origin hub</b> are processed; other rows are excluded before any calculation. <b>client</b> is matched to your client coefficients. <b>Destination_dc</b> is matched to the <b>destination</b> column of the transportation master to get the lane.</p>
+    <button class="drop" id="foDrop" type="button"><strong>Choose file</strong> or drop it here</button>
+    <input type="file" id="foFile" accept=".csv,.xlsx,.txt,.tsv" hidden>
+    <div class="fileinfo" id="foInfo"></div>
+    <div class="err" id="foErr"></div>
+  </section>
+
+  <section class="panel hidden" id="laneView">
+    <div class="sectionhead">
+      <div>
+        <h2 style="margin:0">Lane totals</h2>
+        <p class="hint" style="margin:4px 0 0" id="laneNote"></p>
+      </div>
+      <div class="row"><label class="inline" style="font-size:13px"><input type="checkbox" id="dedupeChk" checked> Remove duplicate AWBs across all sources</label><button class="btn primary" id="laneExport">Download lane totals</button></div>
+    </div>
+    <div class="tablewrap" style="max-height:560px">
+      <table><thead><tr><th>Row Labels</th><th class="num">AWB FWD floor</th><th class="num">AWB LH intransit</th><th class="num">AWB Warehouse pendency</th><th class="num">AWB FM load</th><th class="num">Sum of vol of FWD floor</th><th class="num">Sum of vol LH intransit</th><th class="num">Sum of vol Warehouse pendency</th><th class="num">Sum of vol FM load</th><th class="num">total AWB</th><th class="num">total volumetric</th><th>Fleet Type</th><th class="num">Vehicle Capacity</th><th class="num">Spillover</th><th>Adhoc / LH aligned</th></tr></thead><tbody id="laneBody"></tbody></table>
+    </div>
+    <div class="sheetbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px">
+      <input id="dcName" placeholder="Your name (recorded)" style="min-width:180px;padding:8px 10px;border-radius:10px;border:1px solid #d6e4dc">
+      <button class="btn" id="draftSave">Save draft</button>
+      <button class="btn primary" id="sheetSave">Submit for LH Approval</button>
+      <button class="btn" id="sheetRefresh">Refresh Approved Plan</button>
+      <span class="muted" id="draftNote" style="font-size:12px"></span>
+    </div>
+    <p class="hint" id="sheetMsg" style="margin:6px 0 0"></p>
+  </section>
+
+  <section class="panel" id="subsPanel">
+    <div class="sectionhead">
+      <div>
+        <h2 style="margin:0">My submissions</h2>
+        <p class="hint" style="margin:4px 0 0">Drafts are private to you. A submitted plan goes to the LH team as <b>Pending</b>, and status changes show up here automatically.</p>
+      </div>
+      <div class="row"><button class="btn" id="subsNew">Start a new plan</button></div>
+    </div>
+    <div class="tablewrap" style="max-height:320px">
+      <table class="plain"><thead><tr><th>Plan</th><th>Origin hub</th><th>Plan date</th><th class="num">Lanes</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody id="subsBody"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table>
+    </div>
+    <div id="subDetail" class="hidden" style="margin-top:14px"></div>
+  </section>
+
+  <section class="panel" id="pubPanel">
+    <div class="sectionhead">
+      <div>
+        <h2 style="margin:0">Published plans</h2>
+        <p class="hint" style="margin:4px 0 0">Approved by the LH team and visible to every planner. The approved vehicle for each lane also appears under <b>Adhoc / LH aligned</b> in Lane totals for the selected origin hub.</p>
+      </div>
+      <span class="badge" id="liveBadge">● Connecting…</span>
+    </div>
+    <div class="tablewrap" style="max-height:320px">
+      <table class="plain"><thead><tr><th>Plan</th><th>Origin hub</th><th>Plan date</th><th class="num">Version</th><th>Submitted by</th><th>Published</th><th></th></tr></thead><tbody id="pubBody"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table>
+    </div>
+    <div id="pubDetail" class="hidden" style="margin-top:14px"></div>
+  </section>
+
+  <div id="results" class="hidden">
+    <div class="alert hidden" id="missingBox">
+      <h3 id="missingTitle"></h3>
+      <div id="missingList"></div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="l">Shipments</div><div class="v" id="kRows">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric</div><div class="v" id="kVol">0</div></div>
+      <div class="kpi"><div class="l">Clients matched</div><div class="v" id="kClients">0</div></div>
+      <div class="kpi" id="kMissBox"><div class="l">Rows at default coeff</div><div class="v" id="kMiss">0</div></div>
+    </div>
+
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0" id="sumTitle">Volumetric by next_location</h2>
+        <div class="row">
+          <input type="text" id="sumSearch" placeholder="Search…" style="width:140px">
+          <label class="inline">Group by <select id="groupBy"></select></label>
+          <label class="inline">Sort <select id="sortBy"><option value="name">A → Z</option><option value="vol">Volumetric ↓</option><option value="n">Count ↓</option></select></label>
+          <label class="inline">Client column <select id="clientCol"></select></label>
+          <button class="btn" id="exportSummary">Download summary</button>
+          <button class="btn primary" id="exportData">Download data + volumetric</button>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table><thead><tr><th id="gHead">Client</th><th id="destHead" class="hidden">Destinations included</th><th class="num">Count of awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="sumBody"></tbody></table>
+      </div>
+      <div class="muted" id="sumNote" style="font-size:12px;margin-top:6px"></div>
+    </section>
+
+    <section class="panel hidden" id="reviewPanel">
+      <div class="sectionhead">
+        <h2 style="margin:0">Not eligible for planning <span class="muted" id="neCount" style="font-weight:400;font-size:13px"></span></h2>
+        <button class="btn" id="exportNE">Download list</button>
+      </div>
+      <p class="hint" id="neHint">These next_location values have no matching Destination in the transportation master, so they are not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:320px">
+        <table><thead><tr><th>next_location</th><th class="num">Count of awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="neBody"></tbody></table>
+      </div>
+      <div id="ambWrap" class="hidden">
+        <h3 class="sub">Destinations on more than one lane <span class="muted" id="ambCount" style="font-weight:400"></span></h3>
+        <p class="hint">These appear as a Destination on several lanes. Each shipment uses the lane whose origin matches its location_name; otherwise the lane where the destination appears most often in the master. Check these if a total looks off.</p>
+        <div class="tablewrap" style="max-height:280px">
+          <table><thead><tr><th>next_location</th><th>Lane used</th><th>Other lanes</th><th class="num">Count of awb_number</th></tr></thead><tbody id="ambBody"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">Row preview <span class="muted" id="prevNote" style="font-weight:400;font-size:13px"></span></h2>
+      </div>
+      <div class="tablewrap"><table><thead id="prevHead"></thead><tbody id="prevBody"></tbody></table></div>
+    </section>
+  </div>
+
+  <div id="lhResults" class="hidden">
+    <div class="kpis">
+      <div class="kpi"><div class="l">LH Intransit rows</div><div class="v" id="lhRows">0</div></div>
+      <div class="kpi"><div class="l">Next Loc from route mapping</div><div class="v" id="lhHit">0</div></div>
+      <div class="kpi" id="lhFallBox"><div class="l" id="lhFallLbl">Fallback to Shipment_Destination_dc</div><div class="v" id="lhFall">0</div></div>
+      <div class="kpi"><div class="l">Distinct Next Loc</div><div class="v" id="lhNextN">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="lhVol">0</div></div>
+    </div>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">LH Intransit by Next Loc <span class="muted" id="lhSrcNote" style="font-weight:400;font-size:13px"></span></h2>
+        <div class="row">
+          <input type="text" id="lhSearch" placeholder="Search…" style="width:140px">
+          <button class="btn primary" id="lhExport">Download LH Intransit + OD Pair, Next Loc</button>
+        </div>
+      </div>
+      <div class="muted" id="lhNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Next Loc</th><th class="num">Count of Awb_number</th><th class="num">From route mapping</th><th class="num">Fallback</th></tr></thead><tbody id="lhSumBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">LH Intransit volumetric by lane</h2>
+        <div class="row"><button class="btn" id="lhLaneExport">Download lane summary</button></div>
+      </div>
+      <div class="muted" id="lhLaneNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Lane Code</th><th>Destinations included</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="lhLaneBody"></tbody></table>
+      </div>
+      <h3 class="sub">Not eligible for planning <span class="muted" id="lhNECount" style="font-weight:400"></span></h3>
+      <p class="hint">Next Loc with no lane in the transportation master (or outside the selected hub's lanes). Not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:240px">
+        <table><thead><tr><th>Next Loc</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="lhNEBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead"><h2 style="margin:0">LH Intransit preview <span class="muted" id="lhPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="tablewrap"><table><thead id="lhPrevHead"></thead><tbody id="lhPrevBody"></tbody></table></div>
+    </section>
+  </div>
+  <div id="foResults" class="hidden">
+    <div class="kpis">
+      <div class="kpi"><div class="l">FM Load rows</div><div class="v" id="foRows">0</div></div>
+      <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="foElig">0</div></div>
+      <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="foNE">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="foVol">0</div></div>
+    </div>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">FM Load volumetric by lane</h2>
+        <div class="row"><button class="btn" id="foLaneExport">Download lane summary</button><button class="btn primary" id="foExport">Download with lanes</button></div>
+      </div>
+      <div class="muted" id="foNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Lane Code</th><th>Destinations included</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="foLaneBody"></tbody></table>
+      </div>
+      <h3 class="sub">Not eligible for planning <span class="muted" id="foNECount" style="font-weight:400"></span></h3>
+      <p class="hint">Destination_dc with no lane in the transportation master (or outside the selected hub's lanes). Not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:240px">
+        <table><thead><tr><th>Destination_dc</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="foNEBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead"><h2 style="margin:0">FM Load preview <span class="muted" id="foPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="tablewrap"><table><thead id="foPrevHead"></thead><tbody id="foPrevBody"></tbody></table></div>
+    </section>
+  </div>
+  <div id="whResults" class="hidden">
+    <div class="kpis">
+      <div class="kpi"><div class="l">Warehouse Pendency rows</div><div class="v" id="whRows">0</div></div>
+      <div class="kpi"><div class="l">Eligible rows</div><div class="v" id="whElig">0</div></div>
+      <div class="kpi"><div class="l">Not eligible rows</div><div class="v" id="whNE">0</div></div>
+      <div class="kpi"><div class="l">Total volumetric (eligible)</div><div class="v" id="whVol">0</div></div>
+    </div>
+    <section class="panel">
+      <div class="sectionhead">
+        <h2 style="margin:0">Warehouse Pendency volumetric by lane</h2>
+        <div class="row"><button class="btn" id="whLaneExport">Download lane summary</button><button class="btn primary" id="whExport">Download with lanes</button></div>
+      </div>
+      <div class="muted" id="whNote" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tablewrap" style="max-height:360px">
+        <table><thead><tr><th>Lane Code</th><th>Destinations included</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="whLaneBody"></tbody></table>
+      </div>
+      <h3 class="sub">Not eligible for planning <span class="muted" id="whNECount" style="font-weight:400"></span></h3>
+      <p class="hint">destination_dc with no lane in the transportation master (or outside the selected hub's lanes). Not counted in any lane.</p>
+      <div class="tablewrap" style="max-height:240px">
+        <table><thead><tr><th>destination_dc</th><th class="num">Count of Awb_number</th><th class="num">Sum of volumetric coeff</th></tr></thead><tbody id="whNEBody"></tbody></table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="sectionhead"><h2 style="margin:0">Warehouse Pendency preview <span class="muted" id="whPrevNote" style="font-weight:400;font-size:13px"></span></h2></div>
+      <div class="tablewrap"><table><thead id="whPrevHead"></thead><tbody id="whPrevBody"></tbody></table></div>
+    </section>
+  </div>
+</div>
+
+<div id="pageCoeff" class="hidden">
+  <div class="pagehead">
+    <button class="btn" id="backMain">← Back to dashboard</button>
+    <h1>Client coefficients</h1>
+  </div>
+  <section class="panel">
+    <div class="sectionhead">
+      <h2 style="margin:0">Coefficient table <span class="muted" id="coeffCount" style="font-weight:400"></span></h2>
+      <div class="row">
+        <label class="inline">Default for unknown clients
+          <input type="number" step="any" id="defaultCoeff" value="1" placeholder="none">
+        </label>
+        <button class="btn" id="addCoeff">+ Add client</button>
+        <button class="btn" id="exportCoeff">Download table</button>
+        <button class="btn" id="clearCoeff">Clear</button>
+      </div>
+    </div>
+    <p class="hint" style="margin-bottom:8px">Edit any value inline. Matching ignores upper/lower case and extra spaces. Clients not in this table, or rows with a blank client name, use the default (1). Empty the default box to flag them instead.</p>
+    <div class="tablewrap" style="max-height:none">
+      <table><thead><tr><th>Client</th><th class="num">Coefficient</th><th></th></tr></thead><tbody id="coeffBody"></tbody></table>
+    </div>
+  </section>
+</div>
+</div>
+<script src="config.js"></script>
+<script src="assets/planner-core.js"></script>
+<script type="module" src="assets/planner-online.js"></script>
+</body>
+</html>

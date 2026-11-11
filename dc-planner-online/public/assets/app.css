@@ -1,0 +1,39 @@
+/* Additions for the online version. theme.css is the original planner stylesheet, unchanged. */
+html.auth-pending body{visibility:hidden}
+.acctbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:-8px 0 10px;font-size:13px;flex-wrap:wrap}
+.acctbar a.btn{text-decoration:none;display:inline-block;font-size:13px;font-weight:500;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 14px;border-radius:999px}
+.acctbar a.btn:hover{border-color:var(--accent)}
+table.plain tr:last-child td{font-weight:inherit}
+.tag.pend{background:var(--warn-soft);color:var(--warn)}
+.tag.draft{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.tag.pub{background:var(--accent);color:#fff}
+tr.sel td{background:var(--accent-soft)}
+.subcard{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--bg)}
+.subcard h3{margin:0 0 6px;font-size:14px}
+.comments{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.comment{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.comment .who{font-size:12px;color:var(--muted)}
+.comment.admin{border-left:3px solid var(--accent)}
+textarea{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%;min-height:64px;resize:vertical}
+button.btn:disabled{opacity:.55;cursor:not-allowed}
+button.danger{border-color:var(--bad);color:var(--bad)}
+/* login pages */
+.authwrap{max-width:440px;margin:0 auto;padding:48px 16px}
+.authwrap .hero{text-align:left}
+.authwrap label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+.authwrap input[type=email],.authwrap input[type=password],.authwrap input[type=text]{width:100%;font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.authwrap .ok{color:var(--ok);font-size:13px;margin-top:8px}
+.authwrap .switch{margin-top:16px;font-size:13px;color:var(--muted)}
+.authwrap .switch a{color:var(--accent)}
+/* admin editor */
+td.edit input[type=text],td.edit input[type=number],td.edit select{font-size:12px;padding:4px 6px;width:auto}
+td.edit input[type=number]{width:78px}
+td.edit input[type=text]{width:96px}
+td.edit input[data-k=approved_remarks]{width:150px;min-width:0!important}
+td.changed{background:var(--warn-soft)!important}
+td.changed input,td.changed select{border-color:var(--warn)}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px 16px;font-size:13px;margin:6px 0 12px}
+.kv div span{color:var(--muted);display:block;font-size:12px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 16px;border-radius:12px;box-shadow:var(--shadow);font-size:13px;z-index:50;max-width:90vw}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" class="auth-pending">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Downstream Planning</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-mode="user">
+<div class="authwrap">
+  <header class="hero">
+    <div class="brandRow">
+      <div class="logoCard"><img src="assets/logo.png" alt="Logo"></div>
+      <div><h1>Downstream Planning</h1><p class="sub" style="margin:0">Planner sign-in</p></div>
+    </div>
+  </header>
+  <section class="panel">
+    <form id="loginForm" novalidate>
+      <h2 style="margin:0 0 4px">Sign in</h2>
+      <label for="email">Email</label>
+      <input type="email" id="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+      <div class="row" style="margin-top:16px;justify-content:space-between">
+        <button class="btn primary" type="submit" id="loginBtn">Sign in</button>
+        <button class="linkbtn" type="button" id="forgotBtn">Forgot password?</button>
+      </div>
+      <div class="err" id="loginErr" role="alert"></div>
+      <div class="ok" id="loginOk" role="status"></div>
+    </form>
+    <p class="switch">LH team? <a href="admin-login.html">Admin login</a> · Accounts are created by your admin.</p>
+  </section>
+</div>
+<script src="config.js"></script>
+<script type="module" src="assets/login.js"></script>
+</body>
+</html>

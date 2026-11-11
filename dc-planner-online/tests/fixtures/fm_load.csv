@@ -1,0 +1,4 @@
+Awb_number,client,Destination_dc,origin_dc,origin_bagging_dc
+F1,ClientA,Malda DC,Kolkata DC,Kolkata DC
+F2,ClientB,Patna DC,Kolkata DC,Other DC
+F3,ClientB,Patna DC,Kolkata DC,Kolkata DC
