@@ -60,6 +60,31 @@ async function openEditor(id, { keepMsg = false } = {}) {
   renderEditor(); renderList(); loadComments();
   $('editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
+/* Version comparison: this version against the version it was started from. */
+async function renderCompare() {
+  const box = $('edCompare'), sub = S.ed.sub;
+  if (!sub.parent_id) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<p class="muted">Loading the previous version…</p>';
+  const { data: par, error } = await sb.from('submissions').select('plan_code, version, data').eq('id', sub.parent_id).maybeSingle();
+  if (!S.ed || S.ed.sub.id !== sub.id) return;
+  if (error || !par) { box.innerHTML = '<p class="err">Could not load the previous version.</p>'; return; }
+  const oldRows = new Map(((par.data && par.data.rows) || []).map(x => [norm(x.lane), x]));
+  const newRows = new Map(((sub.data && sub.data.rows) || []).map(x => [norm(x.lane), x]));
+  const FIELDS = ['total_awb', 'total_volumetric', 'fleet_type', 'vehicle_capacity', 'adhoc_required', 'dc_vehicle'];
+  const out = [];
+  newRows.forEach((n, k) => {
+    const o = oldRows.get(k);
+    if (!o) { out.push({ lane: n.lane, kind: 'Added', changes: '' }); return; }
+    const diffs = FIELDS.filter(f => String(o[f] ?? '') !== String(n[f] ?? '')).map(f => f + ': ' + (o[f] ?? '–') + ' → ' + (n[f] ?? '–'));
+    if (diffs.length) out.push({ lane: n.lane, kind: 'Changed', changes: diffs.join('; ') });
+  });
+  oldRows.forEach((o, k) => { if (!newRows.has(k)) out.push({ lane: o.lane, kind: 'Removed', changes: '' }); });
+  box.innerHTML = '<h3 class="sub">Compared with ' + esc(par.plan_code) + ' v' + par.version + '</h3>'
+    + (out.length ? '<div class="tablewrap" style="max-height:260px"><table class="plain"><thead><tr><th>Lane</th><th>Change</th><th>Details</th></tr></thead><tbody>'
+      + out.map(x => '<tr><td>' + esc(x.lane) + '</td><td>' + esc(x.kind) + '</td><td>' + esc(x.changes) + '</td></tr>').join('') + '</tbody></table></div>'
+      : '<p class="muted">No lane changes from the previous version.</p>');
+}
 function msg(t, bad) { $('edMsg').textContent = t; $('edMsg').style.color = bad ? '#b42318' : ''; }
 function readOnly() { return ['changes_requested', 'rejected'].includes(S.ed.sub.status); }
 function renderEditor() {
@@ -70,6 +95,7 @@ function renderEditor() {
     + '<div><span>Approved</span>' + (approved ? fmtDt(approved.approved_at) + ' by ' + esc(approved.approved_by_name) + ' (v' + approved.version + ')' : '–') + '</div><div><span>Published</span>' + (approved && approved.is_published ? fmtDt(approved.published_at) : '–') + '</div>';
   $('vehList').innerHTML = (S.ed.origData.vehicles || []).map(x => '<option value="' + esc(x) + '">').join('');
   renderRows();
+  renderCompare();
   const st = sub.status, ro = readOnly();
   const show = (id, on) => $(id).classList.toggle('hidden', !on);
   show('actSave', !ro); show('actApprove', st === 'pending' || st === 'approved'); show('actApprovePub', !ro);

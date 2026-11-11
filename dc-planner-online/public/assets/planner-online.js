@@ -128,10 +128,48 @@ $('sheetSave').onclick = () => guarded($('sheetSave'), async () => {
   toast('Submitted ' + data.plan_code + ' — pending LH approval');
 });
 $('sheetRefresh').onclick = async () => { sheetMsg('Refreshing…'); await refreshAll(); statusBanner(); };
+/* Submit New Plan: a blank plan form. Uploaded data files stay loaded; lane ticks and the plan's own fields reset. */
 $('subsNew').onclick = () => {
   setCurrent(null);
-  sheetMsg('Started a new plan. Your next Save draft or Submit creates a new plan code. Lane ticks are kept; change them in Lane totals.');
+  P.setLanePlan({});
+  if (S.openId) { S.openId = null; $('subDetail').classList.add('hidden'); renderMine(); }
+  sheetMsg('New plan started with a clean form. Your next Save draft or Submit creates a new plan code. Uploaded data files are kept.');
 };
+
+/* Edit Existing Plan: pick an approved or published plan, then start its next version. */
+const EDITABLE_BASE = ['approved', 'published', 'superseded'];
+$('subsEdit').onclick = () => {
+  const bases = S.mine.filter(s => EDITABLE_BASE.includes(s.status));
+  $('editPick').innerHTML = bases.length
+    ? bases.map(s => '<option value="' + esc(s.id) + '">' + esc(s.plan_code) + ' · v' + s.version + ' · ' + esc(s.origin_dc || 'All hubs') + ' · ' + statusLabel(s.status) + '</option>').join('')
+    : '<option value="">No approved or published plans to edit yet</option>';
+  $('editGo').disabled = !bases.length;
+  $('editPanel').classList.remove('hidden');
+};
+$('editCancel').onclick = () => $('editPanel').classList.add('hidden');
+$('editGo').onclick = () => guarded($('editGo'), async () => {
+  const id = $('editPick').value;
+  if (!id) return;
+  const { data, error } = await sb.rpc('start_new_version', { p_parent: id });
+  if (error) throw error;
+  $('editPanel').classList.add('hidden');
+  await loadMine();
+  setCurrent(data.id);
+  restoreInto(data);
+  sheetMsg('Started ' + data.plan_code + ' (version ' + data.version + '). Lane ticks and origin hub restored. Adjust, then Save draft or Submit for LH Approval.');
+  $('laneView').scrollIntoView({ behavior: 'smooth' });
+});
+
+/* Origin hub: remembered on the account, so it comes back on the next visit. */
+async function loadOriginPref() {
+  const { data } = await sb.from('profiles').select('last_origin_dc').eq('id', uid).maybeSingle();
+  const saved = data && data.last_origin_dc;
+  if (saved && !P.hubDisplay()) P.setOrigin(saved);
+}
+$('originSel').addEventListener('change', () => {
+  sb.from('profiles').update({ last_origin_dc: $('originSel').value }).eq('id', uid)
+    .then(({ error }) => { if (error) toast('Could not save origin hub: ' + errText(error)); });
+});
 
 /* ---------- My submissions ---------- */
 function renderMine() {
@@ -274,5 +312,6 @@ sb.channel('planner-' + uid)
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshAll(true).then(statusBanner); });
 window.addEventListener('online', () => refreshAll(true).then(statusBanner));
 
+await loadOriginPref().catch(() => {});
 await refreshAll();
 statusBanner();
