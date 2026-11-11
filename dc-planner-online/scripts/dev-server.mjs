@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /* Tiny static server for local testing: node scripts/dev-server.mjs [port]
-   Serves ./public with the same security headers as production (public/_headers). */
+   Serves ./public (or the folder named as the 2nd argument, e.g. offline) with the same security headers as production. */
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, extname, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', process.argv[3] || 'public');
 const port = Number(process.argv[2] || process.env.PORT || 5173);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json' };
 const headers = {};

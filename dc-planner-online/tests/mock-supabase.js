@@ -99,6 +99,24 @@ class Q {
 }
 function rpc(name, a) {
   window.__mockLog.push({ rpc: name, args: a });
+  if (name === 'start_new_version') {
+    const d0 = db(), me0 = uid();
+    const p = d0.submissions.find(x => x.id === a.p_parent);
+    if (!p || p.user_id !== me0) return { data: null, error: { message: 'Submission not found.' } };
+    if (!['approved', 'published', 'superseded'].includes(p.status)) return { data: null, error: { message: 'Only an approved or published plan can be edited (this one is ' + p.status + ').' } };
+    const root = p.root_id ? d0.submissions.find(x => x.id === p.root_id) : p;
+    const fam = d0.submissions.filter(x => x.id === root.id || x.root_id === root.id);
+    if (fam.some(x => ['draft', 'pending', 'changes_requested'].includes(x.status))) return { data: null, error: { message: 'A new version of ' + root.plan_code + ' is already in progress. Finish or withdraw it first.' } };
+    const n = Math.max(...fam.map(x => x.version || 0)) + 1;
+    const child = { ...JSON.parse(JSON.stringify(p)), id: rid(), plan_code: root.plan_code + '-V' + n, status: 'draft', version: n, parent_id: p.id, root_id: root.id, submitted_at: null, decided_at: null, decided_by: null, created_at: now(), updated_at: now() };
+    d0.submissions.push(child); save(d0);
+    return { data: child, error: null };
+  }
+  const supersede = (d1, sub) => {
+    const r = sub.root_id || sub.id;
+    d1.submissions.forEach(x => { if ((x.id === r || x.root_id === r) && x.id !== sub.id && x.status === 'published') x.status = 'superseded'; });
+    d1.approved_plans.forEach(x => { const o = d1.submissions.find(y => y.id === x.submission_id); if (o && (o.id === r || o.root_id === r) && o.id !== sub.id) x.is_published = false; });
+  };
   const d = db(), me = uid(), adm = isAdmin();
   const s = d.submissions.find(x => x.id === a.p_id);
   const err = m => ({ data: null, error: { message: m } });
@@ -110,7 +128,7 @@ function rpc(name, a) {
     if (!['draft', 'changes_requested'].includes(s.status)) return err('This plan is already ' + s.status + '.');
     if (!ok(s.data)) return err('The plan has no lanes.');
     if (!s.created_by_name.trim()) return err('Type your name first. It is recorded with the plan.');
-    const old = { ...s }; Object.assign(s, { status: 'pending', version: s.version + 1, submitted_at: now(), updated_at: now() });
+    const old = { ...s }; Object.assign(s, { status: 'pending', version: s.parent_id ? s.version : s.version + 1, submitted_at: now(), updated_at: now() });
     d.submission_versions.push({ id: d.submission_versions.length + 1, submission_id: s.id, version: s.version, origin_dc: s.origin_dc, plan_date: s.plan_date, created_by_name: s.created_by_name, data: JSON.parse(JSON.stringify(s.data)), submitted_by: me, submitted_at: now() });
     events.push(['submissions', 'UPDATE', s, old], ['plan_events', 'INSERT', ev('submitted')]); result = s;
   } else {
@@ -127,10 +145,12 @@ function rpc(name, a) {
       if (!ok(a.p_final)) return err('The approved plan has no lanes.');
       d.submission_reviews = d.submission_reviews.filter(x => x.submission_id !== s.id).concat([{ submission_id: s.id, draft_data: a.p_final, updated_by: me, updated_at: now() }]);
       d.approved_plans = d.approved_plans.filter(x => x.submission_id !== s.id).concat([{ submission_id: s.id, plan_code: s.plan_code, origin_dc: s.origin_dc, plan_date: s.plan_date, version: s.version, submitted_by_name: s.created_by_name, final_data: a.p_final, approved_by: me, approved_by_name: byId(me)[1].full_name, approved_at: now(), is_published: !!a.p_publish, published_at: a.p_publish ? now() : null }]);
+      if (a.p_publish) supersede(d, s);
       Object.assign(s, { status: a.p_publish ? 'published' : 'approved', decided_at: now(), updated_at: now() });
       events.push(['approved_plans', 'UPDATE', ap()], ['submissions', 'UPDATE', s, old], ['plan_events', 'INSERT', ev(a.p_publish ? 'published' : 'approved')]); result = ap();
     } else if (name === 'publish_submission') {
       const x = ap(); if (!x) return err('Approve the plan before publishing it.');
+      if (a.p_publish) supersede(d, s);
       x.is_published = !!a.p_publish; x.published_at = a.p_publish ? now() : null;
       Object.assign(s, { status: a.p_publish ? 'published' : 'approved', updated_at: now() });
       events.push(['submissions', 'UPDATE', s, old], ['plan_events', 'INSERT', ev(a.p_publish ? 'published' : 'unpublished')]); result = x;
